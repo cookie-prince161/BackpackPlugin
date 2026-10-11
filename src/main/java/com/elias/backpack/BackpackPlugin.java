@@ -1,7 +1,6 @@
 package com.elias.backpack;
 
 import com.destroystokyo.paper.profile.PlayerProfile;
-import com.destroystokyo.paper.profile.PlayerTextures;
 import net.md_5.bungee.api.ChatColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -34,6 +33,7 @@ import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.profile.PlayerTextures;
 
 import java.io.File;
 import java.io.IOException;
@@ -115,7 +115,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         SkullMeta meta = (SkullMeta) head.getItemMeta();
         if (meta == null) return head;
 
-        // Korrigiert auf Paper-Profile API (Bukkit.createProfile)
         PlayerProfile profile = Bukkit.createProfile(UUID.randomUUID());
         PlayerTextures textures = profile.getTextures();
         try {
