@@ -22,6 +22,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -48,7 +50,7 @@ import java.util.UUID;
 public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
 
     private static final String GUI_TITLE = ChatColor.DARK_GRAY + "Dein Rucksack";
-    private static final String CHEST_HEAD_URL = "http://textures.minecraft.net/texture/68682935de3869213e2f49213a0a6534571d98522e8312e0325d7629532824";
+    private static final String CHEST_HEAD_URL = "http://textures.minecraft.net/texture/d5c6dc2bbf51c36cfc7714585a6a5683ef2b14d47d8ff714654a893f5da622";
 
     private NamespacedKey backpackItemKey;
     private NamespacedKey placedChestKey;
@@ -76,7 +78,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpitem").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.0.0 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.0.1 erfolgreich aktiviert!");
     }
 
     @Override
@@ -129,6 +131,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "Rechtsklick: " + ChatColor.YELLOW + "Rucksack öffnen");
         lore.add(ChatColor.GRAY + "Shift + Rechtsklick: " + ChatColor.YELLOW + "Als Kiste platzieren");
+        lore.add(ChatColor.GRAY + "Linksklick auf Kiste: " + ChatColor.YELLOW + "Sofort abbauen");
         meta.setLore(lore);
 
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
@@ -200,7 +203,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = (Player) sender;
         String cmd = command.getName().toLowerCase();
 
-        if (cmd.equals("backpack")) {
+        if (cmd.equals("backpack") || cmd.equals("bp")) {
             boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
 
             if (!hasBackpackInInventory(p) && !isHidden) {
@@ -228,7 +231,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                p.getInventory().remove(createBackpackItem());
                 for (int i = 0; i < p.getInventory().getSize(); i++) {
                     ItemStack item = p.getInventory().getItem(i);
                     if (isBackpackItem(item)) {
@@ -239,7 +241,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 dataConfig.set("hidden." + p.getUniqueId(), true);
                 saveDataConfig();
 
-                p.sendMessage(ChatColor.GREEN + "Rucksack-Item versteckt. Du kannst /backpack weiterhin nutzen.");
+                p.sendMessage(ChatColor.GREEN + "Rucksack-Item versteckt. Du kannst /bp oder /backpack weiterhin nutzen.");
                 p.playSound(p.getLocation(), Sound.ENTITY_ITEM_PICKUP, 1.0f, 0.5f);
                 return true;
             }
@@ -307,14 +309,64 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = event.getPlayer();
         ItemStack item = event.getItem();
 
+        // 1. Instant-Break per Linksklick auf eine platzierte Rucksack-Kiste
+        if (event.getAction() == Action.LEFT_CLICK_BLOCK && event.getClickedBlock() != null) {
+            Block block = event.getClickedBlock();
+            if (block.getType() == Material.CHEST && block.getState() instanceof Chest) {
+                Chest chest = (Chest) block.getState();
+                PersistentDataContainer pdc = chest.getPersistentDataContainer();
+
+                if (pdc.has(placedChestKey, PersistentDataType.STRING)) {
+                    String ownerUuidStr = pdc.get(placedChestKey, PersistentDataType.STRING);
+
+                    // Nur der Eigentümer darf die Kiste per Linksklick abbauen
+                    if (ownerUuidStr != null && ownerUuidStr.equals(p.getUniqueId().toString())) {
+                        event.setCancelled(true);
+                        breakBackpackChest(block, chest, p);
+                        return;
+                    } else {
+                        event.setCancelled(true);
+                        p.sendMessage(ChatColor.RED + "Du kannst den Rucksack anderer Spieler nicht abbauen!");
+                        return;
+                    }
+                }
+            }
+        }
+
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (!isBackpackItem(item)) return;
 
+        // 2. Normaler Rechtsklick (Klick in die Luft oder ohne Shift auf Block) -> GUI öffnen
         if (event.getAction() == Action.RIGHT_CLICK_AIR || (event.getAction() == Action.RIGHT_CLICK_BLOCK && !p.isSneaking())) {
             event.setCancelled(true);
             Inventory inv = getBackpackInventory(p.getUniqueId());
             p.openInventory(inv);
             p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 1.0f, 1.0f);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onInventoryClick(InventoryClickEvent event) {
+        // Blockiert das Ausrüsten des Kopfes auf den Helm-Slot
+        if (event.getSlotType() == InventoryType.SlotType.ARMOR && event.getRawSlot() == 5) {
+            ItemStack cursor = event.getCursor();
+            if (isBackpackItem(cursor)) {
+                event.setCancelled(true);
+                if (event.getWhoClicked() instanceof Player) {
+                    ((Player) event.getWhoClicked()).sendMessage(ChatColor.RED + "Du kannst den Rucksack nicht auf dem Kopf tragen!");
+                }
+            }
+        }
+
+        // Blockiert Shift-Klick ins Rüstungsinventar
+        if (event.isShiftClick() && isBackpackItem(event.getCurrentItem())) {
+            if (event.getInventory().getType() == InventoryType.CRAFTING || event.getInventory().getType() == InventoryType.PLAYER) {
+                ItemStack item = event.getCurrentItem();
+                if (item != null && item.getType() == Material.PLAYER_HEAD) {
+                    // Shift-Klick abfangen um Ausrüsten im Rüstungsslot zu verhindern
+                    event.setCancelled(true);
+                }
+            }
         }
     }
 
@@ -363,29 +415,38 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
             if (pdc.has(placedChestKey, PersistentDataType.STRING)) {
                 String ownerUuidStr = pdc.get(placedChestKey, PersistentDataType.STRING);
-                if (ownerUuidStr == null) return;
-
-                UUID ownerUuid = UUID.fromString(ownerUuidStr);
-                Inventory backpackInv = getBackpackInventory(ownerUuid);
-                Inventory chestInv = chest.getBlockInventory();
-
-                for (int i = 0; i < Math.min(chestInv.getSize(), backpackInv.getSize()); i++) {
-                    backpackInv.setItem(i, chestInv.getItem(i));
-                }
-                saveBackpack(ownerUuid, backpackInv);
-
-                chestInv.clear();
-
-                event.setCancelled(true);
-                block.setType(Material.AIR);
-
-                Location dropLoc = block.getLocation().add(0.5, 0.5, 0.5);
-                block.getWorld().dropItemNaturally(dropLoc, createBackpackItem());
-
                 Player p = event.getPlayer();
-                p.playSound(dropLoc, Sound.BLOCK_WOOD_BREAK, 1.0f, 1.0f);
+
+                // Nur der Eigentümer darf abbrechen
+                if (ownerUuidStr != null && ownerUuidStr.equals(p.getUniqueId().toString())) {
+                    event.setCancelled(true);
+                    breakBackpackChest(block, chest, p);
+                } else {
+                    event.setCancelled(true);
+                    p.sendMessage(ChatColor.RED + "Du kannst den Rucksack anderer Spieler nicht abbauen!");
+                }
             }
         }
+    }
+
+    private void breakBackpackChest(Block block, Chest chest, Player p) {
+        UUID ownerUuid = p.getUniqueId();
+        Inventory backpackInv = getBackpackInventory(ownerUuid);
+        Inventory chestInv = chest.getBlockInventory();
+
+        // Inhalt in Daten sichern
+        for (int i = 0; i < Math.min(chestInv.getSize(), backpackInv.getSize()); i++) {
+            backpackInv.setItem(i, chestInv.getItem(i));
+        }
+        saveBackpack(ownerUuid, backpackInv);
+
+        chestInv.clear();
+        block.setType(Material.AIR);
+
+        Location dropLoc = block.getLocation().add(0.5, 0.5, 0.5);
+        block.getWorld().dropItemNaturally(dropLoc, createBackpackItem());
+
+        p.playSound(dropLoc, Sound.BLOCK_WOOD_BREAK, 1.0f, 1.0f);
     }
 
     @EventHandler
