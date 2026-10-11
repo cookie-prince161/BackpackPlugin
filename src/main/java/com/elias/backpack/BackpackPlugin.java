@@ -84,7 +84,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpitem").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.0.3 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.0.4 erfolgreich aktiviert!");
     }
 
     @Override
@@ -135,8 +135,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
         meta.setDisplayName(ChatColor.GOLD + "Rucksack " + ChatColor.GRAY + "(Quick Access)");
         List<String> lore = new ArrayList<>();
-        lore.add(ChatColor.GRAY + "Klick / Q im Inv: " + ChatColor.YELLOW + "Rucksack öffnen");
-        lore.add(ChatColor.GRAY + "Rechtsklick: " + ChatColor.YELLOW + "Rucksack öffnen");
+        lore.add(ChatColor.GRAY + "Linksklick: " + ChatColor.YELLOW + "Item im Inventar bewegen");
+        lore.add(ChatColor.GRAY + "Rechtsklick / Q im Inv: " + ChatColor.YELLOW + "Rucksack öffnen");
         lore.add(ChatColor.GRAY + "Shift + Rechtsklick: " + ChatColor.YELLOW + "Als Kiste platzieren");
         lore.add(ChatColor.GRAY + "Linksklick auf Kiste: " + ChatColor.YELLOW + "Sofort abbauen");
         meta.setLore(lore);
@@ -173,7 +173,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // Löscht herumliegende Rucksack-Items auf dem Boden
     private void clearDroppedBackpackItems(UUID ownerUuid) {
         String targetUuid = ownerUuid.toString();
 
@@ -196,7 +195,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // Entfernt platzierte Rucksack-Kisten-Blöcke
     private void destroyPlacedBackpackBlocks(UUID ownerUuid) {
         String targetUuid = ownerUuid.toString();
 
@@ -335,16 +333,10 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             }
 
             if (action.equals("recover")) {
-                // 1. Herumliegende Items am Boden löschen
                 clearDroppedBackpackItems(p.getUniqueId());
-
-                // 2. Platzierte Kisten-Blöcke löschen
                 destroyPlacedBackpackBlocks(p.getUniqueId());
-
-                // 3. Inventar des Spielers bereinigen
                 removeAllBackpackItems(p);
 
-                // 4. Prüfen ob Inventar voll ist
                 if (p.getInventory().firstEmpty() == -1) {
                     dataConfig.set("hidden." + p.getUniqueId(), true);
                     saveDataConfig();
@@ -355,7 +347,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                // 5. Normales Hinzufügen
                 dataConfig.set("hidden." + p.getUniqueId(), false);
                 saveDataConfig();
 
@@ -380,23 +371,36 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = (Player) event.getWhoClicked();
 
         ItemStack current = event.getCurrentItem();
+        ItemStack cursor = event.getCursor();
 
-        // Greift in allen Inventaren (auch im Spielerinventar)
+        // 1. Verhindern, dass der Rucksack per Drag/Drop auf den Helm-Slot platziert wird
+        if (event.getSlotType() == InventoryType.SlotType.ARMOR && event.getRawSlot() == 5) {
+            if (isBackpackItem(cursor)) {
+                event.setCancelled(true);
+                p.sendMessage(ChatColor.RED + "Du kannst den Rucksack nicht auf dem Kopf tragen!");
+                return;
+            }
+        }
+
+        // 2. Interaktionen mit dem Rucksack-Item im Inventar
         if (isBackpackItem(current)) {
             ClickType click = event.getClick();
 
-            // Rüstungsslot-Ausrüsten blockieren
-            if (event.getSlotType() == InventoryType.SlotType.ARMOR) {
+            // Shift-Klick verhindern (damit er nicht automatisch auf den Kopf gerüstet wird)
+            if (event.isShiftClick()) {
                 event.setCancelled(true);
-                p.sendMessage(ChatColor.RED + "Du kannst den Rucksack nicht als Helm tragen!");
                 return;
             }
 
-            // Quick-Open beim Anklicken oder Drücken von Q / Drop-Taste
-            if (click == ClickType.LEFT || click == ClickType.RIGHT || click == ClickType.DROP || click == ClickType.CONTROL_DROP || click == ClickType.NUMBER_KEY) {
+            // Linksklick: Erlaubt normales Bewegen/Greifen des Items (nichts weiter tun)
+            if (click == ClickType.LEFT) {
+                return; 
+            }
+
+            // Rechtsklick oder Q-Taste: Rucksack-Interface öffnen
+            if (click == ClickType.RIGHT || click == ClickType.DROP || click == ClickType.CONTROL_DROP) {
                 event.setCancelled(true);
 
-                // Ein Tick später öffnen, damit der Event-Loop nicht blockiert
                 Bukkit.getScheduler().runTask(this, () -> {
                     p.closeInventory();
                     Inventory inv = getBackpackInventory(p.getUniqueId());
@@ -438,7 +442,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (!isBackpackItem(item)) return;
 
-        // Normaler Rechtsklick (In die Luft oder Klick ohne Shift)
+        // Normaler Rechtsklick (In die Luft oder Klick ohne Shift auf einen Block)
         if (event.getAction() == Action.RIGHT_CLICK_AIR || (event.getAction() == Action.RIGHT_CLICK_BLOCK && !p.isSneaking())) {
             event.setCancelled(true);
             Inventory inv = getBackpackInventory(p.getUniqueId());
