@@ -1,0 +1,19 @@
+name: BackpackPlugin
+version: 1.0.0
+main: com.elias.backpack.BackpackPlugin
+api-version: '1.21'
+description: Einzigartiges Backpack-System mit Quick-Access-Item, Block-Placement & Recovery.
+
+commands:
+  backpack:
+    description: Öffnet das Backpack-Menü.
+    usage: /backpack
+    permission: backpack.use
+  bpitem:
+    description: Zeigt oder versteckt das Backpack Quick-Access Item.
+    usage: /bpitem <show|hide|recover>
+    permission: backpack.use
+
+permissions:
+  backpack.use:
+    default: true
