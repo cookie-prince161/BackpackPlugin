@@ -1,5 +1,7 @@
 package com.elias.backpack;
 
+import com.destroystokyo.paper.profile.PlayerProfile;
+import com.destroystokyo.paper.profile.PlayerTextures;
 import net.md_5.bungee.api.ChatColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -21,7 +23,6 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
-import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -33,8 +34,6 @@ import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.profile.PlayerProfile;
-import org.bukkit.profile.PlayerTextures;
 
 import java.io.File;
 import java.io.IOException;
@@ -116,7 +115,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         SkullMeta meta = (SkullMeta) head.getItemMeta();
         if (meta == null) return head;
 
-        PlayerProfile profile = Bukkit.createPlayerProfile(UUID.randomUUID());
+        // Korrigiert auf Paper-Profile API (Bukkit.createProfile)
+        PlayerProfile profile = Bukkit.createProfile(UUID.randomUUID());
         PlayerTextures textures = profile.getTextures();
         try {
             textures.setSkin(new URL(CHEST_HEAD_URL));
@@ -311,7 +311,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (!isBackpackItem(item)) return;
 
-        // Normaler Rechtsklick (Klick in die Luft oder ohne Shift auf Block) -> GUI öffnen & Platzieren verhindern
         if (event.getAction() == Action.RIGHT_CLICK_AIR || (event.getAction() == Action.RIGHT_CLICK_BLOCK && !p.isSneaking())) {
             event.setCancelled(true);
             Inventory inv = getBackpackInventory(p.getUniqueId());
@@ -327,25 +326,21 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
         if (!isBackpackItem(item)) return;
 
-        // Nur platzieren erlauben, wenn geduckt (Shift) wird
         if (!p.isSneaking()) {
             event.setCancelled(true);
             return;
         }
 
-        // Kiste als Spezial-Kiste taggen & Backpack-Inhalt übertragen
         Block block = event.getBlockPlaced();
         block.setType(Material.CHEST);
 
         if (block.getState() instanceof Chest) {
             Chest chest = (Chest) block.getState();
 
-            // Tag im Block setzen
             PersistentDataContainer pdc = chest.getPersistentDataContainer();
             pdc.set(placedChestKey, PersistentDataType.STRING, p.getUniqueId().toString());
             chest.update();
 
-            // Inhalt kopieren
             Inventory backpackInv = getBackpackInventory(p.getUniqueId());
             Inventory chestInv = chest.getBlockInventory();
 
@@ -375,20 +370,16 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 Inventory backpackInv = getBackpackInventory(ownerUuid);
                 Inventory chestInv = chest.getBlockInventory();
 
-                // Aktuellen Kisteninhalt im Backpack abspeichern
                 for (int i = 0; i < Math.min(chestInv.getSize(), backpackInv.getSize()); i++) {
                     backpackInv.setItem(i, chestInv.getItem(i));
                 }
                 saveBackpack(ownerUuid, backpackInv);
 
-                // Kisteninhalt leeren, damit normale Items nicht gedroppt werden
                 chestInv.clear();
 
-                // Block manuell ohne Drops entfernen
                 event.setCancelled(true);
                 block.setType(Material.AIR);
 
-                // Stattdessen den Rucksack-Kopf am Ort des Blocks droppen
                 Location dropLoc = block.getLocation().add(0.5, 0.5, 0.5);
                 block.getWorld().dropItemNaturally(dropLoc, createBackpackItem());
 
@@ -430,4 +421,3 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         return list;
     }
 }
-
