@@ -2,6 +2,10 @@ package com.elias.backpack;
 
 import com.destroystokyo.paper.profile.PlayerProfile;
 import net.md_5.bungee.api.ChatColor;
+import net.md_5.bungee.api.chat.ClickEvent;
+import net.md_5.bungee.api.chat.ComponentBuilder;
+import net.md_5.bungee.api.chat.HoverEvent;
+import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -25,10 +29,14 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.ItemDespawnEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -54,6 +62,7 @@ import java.util.UUID;
 public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
 
     private static final String GUI_TITLE = ChatColor.DARK_GRAY + "Dein Rucksack";
+    private static final String SHOP_TITLE = ChatColor.DARK_BLUE + "Rucksack Upgrades";
     private static final String CHEST_HEAD_URL = "http://textures.minecraft.net/texture/d5c6dc2bbf51c36cfc7714585a6a5683ef2b14d47d8ff714654a893f5da622";
 
     private NamespacedKey backpackItemKey;
@@ -64,6 +73,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
     private FileConfiguration dataConfig;
 
     private final Map<UUID, Inventory> openBackpacks = new HashMap<>();
+    private final Map<UUID, Long> recoverCooldowns = new HashMap<>();
+    private final List<UUID> pendingConfirmations = new ArrayList<>();
 
     @Override
     public void onEnable() {
@@ -71,6 +82,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         placedChestKey = new NamespacedKey(this, "is_backpack_chest");
         backpackOwnerKey = new NamespacedKey(this, "backpack_owner");
 
+        saveDefaultConfig();
         loadDataConfig();
 
         getServer().getPluginManager().registerEvents(this, this);
@@ -83,8 +95,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpitem").setExecutor(this);
             getCommand("bpitem").setTabCompleter(this);
         }
+        if (getCommand("bpadmin") != null) {
+            getCommand("bpadmin").setExecutor(this);
+            getCommand("bpadmin").setTabCompleter(this);
+        }
 
-        getLogger().info("BackpackPlugin v1.0.4 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.1.0 erfolgreich aktiviert!");
     }
 
     @Override
@@ -116,7 +132,27 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // ===== BACKPACK ITEM CREATION =====
+    // ===== UPGRADES & DATA HELPERS =====
+
+    public int getUpgradeLevel(UUID uuid) {
+        return dataConfig.getInt("upgrades." + uuid.toString(), 0);
+    }
+
+    public void setUpgradeLevel(UUID uuid, int level) {
+        dataConfig.set("upgrades." + uuid.toString(), level);
+        saveDataConfig();
+    }
+
+    public boolean isLostOnDeath(UUID uuid) {
+        return dataConfig.getBoolean("lost_on_death." + uuid.toString(), false);
+    }
+
+    public void setLostOnDeath(UUID uuid, boolean lost) {
+        dataConfig.set("lost_on_death." + uuid.toString(), lost);
+        saveDataConfig();
+    }
+
+    // ===== ITEM CREATION =====
 
     public ItemStack createBackpackItem(UUID ownerUuid) {
         ItemStack head = new ItemStack(Material.PLAYER_HEAD);
@@ -133,9 +169,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getLogger().warning("Ungültige Head-Texture URL!");
         }
 
-        meta.setDisplayName(ChatColor.GOLD + "Rucksack " + ChatColor.GRAY + "(Quick Access)");
+        int upgrade = getUpgradeLevel(ownerUuid);
+        String subTitle = upgrade == 2 ? ChatColor.LIGHT_PURPLE + " [Unverlierbar]" : (upgrade == 1 ? ChatColor.AQUA + " [Unzerstörbar]" : "");
+
+        meta.setDisplayName(ChatColor.GOLD + "Rucksack" + subTitle);
         List<String> lore = new ArrayList<>();
-        lore.add(ChatColor.GRAY + "Linksklick: " + ChatColor.YELLOW + "Item im Inventar bewegen");
+        lore.add(ChatColor.GRAY + "Linksklick im Inv: " + ChatColor.YELLOW + "Item bewegen");
         lore.add(ChatColor.GRAY + "Rechtsklick / Q im Inv: " + ChatColor.YELLOW + "Rucksack öffnen");
         lore.add(ChatColor.GRAY + "Shift + Rechtsklick: " + ChatColor.YELLOW + "Als Kiste platzieren");
         lore.add(ChatColor.GRAY + "Linksklick auf Kiste: " + ChatColor.YELLOW + "Sofort abbauen");
@@ -157,6 +196,14 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         return pdc.has(backpackItemKey, PersistentDataType.BYTE);
     }
 
+    public String getBackpackOwner(ItemStack item) {
+        if (!isBackpackItem(item)) return null;
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return null;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        return pdc.get(backpackOwnerKey, PersistentDataType.STRING);
+    }
+
     public boolean hasBackpackInInventory(Player p) {
         for (ItemStack item : p.getInventory().getContents()) {
             if (isBackpackItem(item)) return true;
@@ -175,20 +222,14 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
     private void clearDroppedBackpackItems(UUID ownerUuid) {
         String targetUuid = ownerUuid.toString();
-
         for (World world : Bukkit.getWorlds()) {
             for (Entity entity : world.getEntitiesByClass(Item.class)) {
                 Item itemEntity = (Item) entity;
                 ItemStack stack = itemEntity.getItemStack();
-
                 if (isBackpackItem(stack)) {
-                    ItemMeta meta = stack.getItemMeta();
-                    if (meta != null) {
-                        PersistentDataContainer pdc = meta.getPersistentDataContainer();
-                        String owner = pdc.get(backpackOwnerKey, PersistentDataType.STRING);
-                        if (owner == null || owner.equals(targetUuid)) {
-                            itemEntity.remove();
-                        }
+                    String owner = getBackpackOwner(stack);
+                    if (owner == null || owner.equals(targetUuid)) {
+                        itemEntity.remove();
                     }
                 }
             }
@@ -197,7 +238,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
     private void destroyPlacedBackpackBlocks(UUID ownerUuid) {
         String targetUuid = ownerUuid.toString();
-
         if (dataConfig.contains("placed_chests." + targetUuid)) {
             String worldName = dataConfig.getString("placed_chests." + targetUuid + ".world");
             int x = dataConfig.getInt("placed_chests." + targetUuid + ".x");
@@ -218,6 +258,76 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             dataConfig.set("placed_chests." + targetUuid, null);
             saveDataConfig();
         }
+    }
+
+    // ===== SHOP GUI =====
+
+    public void openShopGUI(Player p) {
+        Inventory shop = Bukkit.createInventory(null, 27, SHOP_TITLE);
+        int level = getUpgradeLevel(p.getUniqueId());
+
+        int cost1 = getConfig().getInt("upgrade1_cost_diamonds", 128);
+        int cost2 = getConfig().getInt("upgrade2_cost_diamonds", 256);
+
+        // Upgrade 1 Item
+        ItemStack up1 = new ItemStack(level >= 1 ? Material.LIME_DYE : Material.ANVIL);
+        ItemMeta meta1 = up1.getItemMeta();
+        if (meta1 != null) {
+            meta1.setDisplayName(ChatColor.AQUA + "Upgrade 1: Unzerstörbar");
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "Schützt dein Backpack vor Lava, Feuer,");
+            lore.add(ChatColor.GRAY + "Explosionen und Despawning!");
+            lore.add("");
+            lore.add(ChatColor.GRAY + "Kosten: " + ChatColor.GOLD + cost1 + " Diamanten");
+            lore.add(level >= 1 ? ChatColor.GREEN + "✔ Bereits freigeschaltet" : ChatColor.YELLOW + "Klicke zum Freischalten");
+            meta1.setLore(lore);
+            up1.setItemMeta(meta1);
+        }
+        shop.setItem(11, up1);
+
+        // Upgrade 2 Item
+        ItemStack up2 = new ItemStack(level >= 2 ? Material.NETHER_STAR : Material.BARRIER);
+        ItemMeta meta2 = up2.getItemMeta();
+        if (meta2 != null) {
+            meta2.setDisplayName(ChatColor.LIGHT_PURPLE + "Upgrade 2: Unverlierbar");
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "Das Backpack droppt nicht mehr beim Tod,");
+            lore.add(ChatColor.GRAY + "sondern bleibt sicher in deinen Händen!");
+            lore.add("");
+            lore.add(ChatColor.GRAY + "Kosten: " + ChatColor.GOLD + cost2 + " Diamanten");
+            lore.add(level >= 2 ? ChatColor.GREEN + "✔ Bereits freigeschaltet" : (level < 1 ? ChatColor.RED + "🔒 Benötigt Upgrade 1" : ChatColor.YELLOW + "Klicke zum Freischalten"));
+            meta2.setLore(lore);
+            up2.setItemMeta(meta2);
+        }
+        shop.setItem(15, up2);
+
+        p.openInventory(shop);
+    }
+
+    private boolean removeDiamonds(Player p, int amount) {
+        int count = 0;
+        for (ItemStack is : p.getInventory().getContents()) {
+            if (is != null && is.getType() == Material.DIAMOND) {
+                count += is.getAmount();
+            }
+        }
+        if (count < amount) return false;
+
+        int left = amount;
+        for (int i = 0; i < p.getInventory().getSize(); i++) {
+            ItemStack is = p.getInventory().getItem(i);
+            if (is != null && is.getType() == Material.DIAMOND) {
+                if (is.getAmount() <= left) {
+                    left -= is.getAmount();
+                    p.getInventory().setItem(i, null);
+                } else {
+                    is.setAmount(is.getAmount() - left);
+                    left = 0;
+                }
+                if (left <= 0) break;
+            }
+        }
+        return true;
     }
 
     // ===== BACKPACK DATA HANDLING =====
@@ -255,12 +365,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         saveDataConfig();
     }
 
-    // ===== BEFEHLE =====
+    // ===== COMMANDS =====
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player)) {
-            sender.sendMessage("Dieser Befehl ist nur für Spieler.");
+            sender.sendMessage("Nur für Spieler.");
             return true;
         }
 
@@ -268,8 +378,17 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         String cmd = command.getName().toLowerCase();
 
         if (cmd.equals("backpack") || cmd.equals("bp")) {
-            boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
+            if (args.length > 0 && args[0].equalsIgnoreCase("menu")) {
+                openShopGUI(p);
+                return true;
+            }
 
+            if (isLostOnDeath(p.getUniqueId())) {
+                p.sendMessage(ChatColor.RED + "Dein Rucksack ist am Todesort verloren gegangen! Du musst ihn erst aufsammeln.");
+                return true;
+            }
+
+            boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
             if (!hasBackpackInInventory(p) && !isHidden) {
                 p.sendMessage(ChatColor.RED + "Du hast deinen Rucksack weder im Inventar noch versteckt! (/bpitem show)");
                 return true;
@@ -289,37 +408,65 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
             String action = args[0].toLowerCase();
 
+            if (action.equals("confirmrecover")) {
+                if (!pendingConfirmations.contains(p.getUniqueId())) {
+                    p.sendMessage(ChatColor.RED + "Du hast keine ausstehende Recover-Bestätigung.");
+                    return true;
+                }
+
+                pendingConfirmations.remove(p.getUniqueId());
+                clearDroppedBackpackItems(p.getUniqueId());
+                destroyPlacedBackpackBlocks(p.getUniqueId());
+                removeAllBackpackItems(p);
+
+                // Inhalt löschen
+                Inventory inv = getBackpackInventory(p.getUniqueId());
+                inv.clear();
+                saveBackpack(p.getUniqueId(), inv);
+
+                setLostOnDeath(p.getUniqueId(), false);
+                dataConfig.set("hidden." + p.getUniqueId(), false);
+                saveDataConfig();
+
+                p.getInventory().addItem(createBackpackItem(p.getUniqueId()));
+                p.sendMessage(ChatColor.YELLOW + "Dein Rucksack wurde wiederhergestellt. Alle darin enthaltenen Items wurden wie angekündigt GELÖSCHT.");
+                p.playSound(p.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                return true;
+            }
+
             if (action.equals("hide")) {
+                if (isLostOnDeath(p.getUniqueId())) {
+                    p.sendMessage(ChatColor.RED + "Dein Rucksack ist verloren! Sammle ihn erst an deinem Todesort auf.");
+                    return true;
+                }
                 if (!hasBackpackInInventory(p)) {
-                    p.sendMessage(ChatColor.RED + "Du musst das Rucksack-Item in deinem Inventar haben, um es zu verstecken!");
+                    p.sendMessage(ChatColor.RED + "Du musst dein Backpack-Item im Inventar haben!");
                     return true;
                 }
 
                 removeAllBackpackItems(p);
-
                 dataConfig.set("hidden." + p.getUniqueId(), true);
                 saveDataConfig();
 
-                p.sendMessage(ChatColor.GREEN + "Rucksack-Item versteckt. Du kannst /bp oder /backpack weiterhin nutzen.");
+                p.sendMessage(ChatColor.GREEN + "Rucksack-Item versteckt. Du kannst /bp weiterhin nutzen.");
                 p.playSound(p.getLocation(), Sound.ENTITY_ITEM_PICKUP, 1.0f, 0.5f);
                 return true;
             }
 
             if (action.equals("show")) {
-                boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
+                if (isLostOnDeath(p.getUniqueId())) {
+                    p.sendMessage(ChatColor.RED + "Dein Rucksack ist verloren! Sammle ihn erst an deinem Todesort auf.");
+                    return true;
+                }
 
+                boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
                 if (!isHidden) {
-                    if (hasBackpackInInventory(p)) {
-                        p.sendMessage(ChatColor.RED + "Dein Rucksack-Item ist bereits in deinem Inventar!");
-                    } else {
-                        p.sendMessage(ChatColor.RED + "Dein Rucksack ist derzeit nicht versteckt. Falls er verloren ging, nutze /bpitem recover!");
-                    }
+                    p.sendMessage(ChatColor.RED + "Dein Rucksack ist bereits in deinem Inventar!");
                     return true;
                 }
 
                 if (p.getInventory().firstEmpty() == -1) {
-                    p.sendMessage(ChatColor.YELLOW + "Dein Inventar ist voll! Der Rucksack bleibt im Hidden-Modus. Nutze /bp zum Öffnen.");
-                    p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+                    p.sendMessage(ChatColor.YELLOW + "Dein Inventar ist voll!");
                     return true;
                 }
 
@@ -327,12 +474,53 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 saveDataConfig();
 
                 p.getInventory().addItem(createBackpackItem(p.getUniqueId()));
-                p.sendMessage(ChatColor.GREEN + "Rucksack-Item wieder in dein Inventar gelegt!");
+                p.sendMessage(ChatColor.GREEN + "Rucksack-Item wieder ins Inventar gelegt!");
                 p.playSound(p.getLocation(), Sound.ENTITY_ITEM_PICKUP, 1.0f, 1.2f);
                 return true;
             }
 
             if (action.equals("recover")) {
+                // Sperre bei Tod prüfen
+                if (isLostOnDeath(p.getUniqueId())) {
+                    int upLevel = getUpgradeLevel(p.getUniqueId());
+
+                    // Mit Upgrade 1 kann man notfall-recovern (Inhalt löscht sich)
+                    if (upLevel >= 1) {
+                        pendingConfirmations.add(p.getUniqueId());
+
+                        p.sendMessage(ChatColor.RED + "========================================");
+                        p.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "WARNUNG:");
+                        p.sendMessage(ChatColor.RED + "Dein Rucksack ist am Todesort unzerstörbar.");
+                        p.sendMessage(ChatColor.RED + "Wenn du ihn jetzt recoverst, werden ALLE INHALTE darin GELÖSCHT!");
+                        
+                        TextComponent confirmButton = new TextComponent("[Ja, ich bestätige]");
+                        confirmButton.setColor(ChatColor.RED);
+                        confirmButton.setBold(true);
+                        confirmButton.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/bpitem confirmrecover"));
+                        confirmButton.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder("Klicke hier, um den Inhalt zu löschen & Rucksack zu recovern").create()));
+
+                        p.spigot().sendMessage(confirmButton);
+                        p.sendMessage(ChatColor.RED + "========================================");
+                        return true;
+                    } else {
+                        p.sendMessage(ChatColor.RED + "Du bist gestorben! Du musst zu deinem Todesort laufen, um dein Backpack aufzusammeln.");
+                        return true;
+                    }
+                }
+
+                // Cooldown prüfen
+                long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
+                long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
+                long now = System.currentTimeMillis();
+
+                if ((now - lastUsed) < (cooldownSec * 1000)) {
+                    long remaining = (cooldownSec * 1000 - (now - lastUsed)) / 1000;
+                    p.sendMessage(ChatColor.RED + "Du musst noch " + remaining + " Sekunden warten, bevor du wieder recovern kannst!");
+                    return true;
+                }
+
+                recoverCooldowns.put(p.getUniqueId(), now);
+
                 clearDroppedBackpackItems(p.getUniqueId());
                 destroyPlacedBackpackBlocks(p.getUniqueId());
                 removeAllBackpackItems(p);
@@ -340,10 +528,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 if (p.getInventory().firstEmpty() == -1) {
                     dataConfig.set("hidden." + p.getUniqueId(), true);
                     saveDataConfig();
-
-                    p.sendMessage(ChatColor.YELLOW + "Dein Inventar ist voll! Der Rucksack wurde wiederhergestellt & versteckt.");
-                    p.sendMessage(ChatColor.YELLOW + "Nutze /bp zum Öffnen oder /bpitem show, sobald du Platz im Inventar hast.");
-                    p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 0.8f);
+                    p.sendMessage(ChatColor.YELLOW + "Inventar voll! Das Backpack wurde wiederhergestellt und versteckt.");
                     return true;
                 }
 
@@ -351,12 +536,43 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 saveDataConfig();
 
                 p.getInventory().addItem(createBackpackItem(p.getUniqueId()));
-                p.sendMessage(ChatColor.GREEN + "Dein Rucksack wurde wiederhergestellt! Alle gedroppten & platzierten Kopien wurden entfernt.");
+                p.sendMessage(ChatColor.GREEN + "Dein Rucksack wurde erfolgreich wiederhergestellt!");
                 p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
                 return true;
             }
+        }
 
-            p.sendMessage(ChatColor.RED + "Benutzung: /bpitem <show|hide|recover>");
+        if (cmd.equals("bpadmin")) {
+            if (!p.hasPermission("backpack.admin")) {
+                p.sendMessage(ChatColor.RED + "Keine Rechte.");
+                return true;
+            }
+
+            if (args.length < 2) {
+                p.sendMessage(ChatColor.RED + "Benutzung: /bpadmin <setcooldown|setupgrade1cost|setupgrade2cost> <wert>");
+                return true;
+            }
+
+            try {
+                int val = Integer.parseInt(args[1]);
+                String sub = args[0].toLowerCase();
+
+                if (sub.equals("setcooldown")) {
+                    getConfig().set("recover_cooldown_seconds", val);
+                    saveConfig();
+                    p.sendMessage(ChatColor.GREEN + "Recover-Cooldown auf " + val + " Sekunden gesetzt!");
+                } else if (sub.equals("setupgrade1cost")) {
+                    getConfig().set("upgrade1_cost_diamonds", val);
+                    saveConfig();
+                    p.sendMessage(ChatColor.GREEN + "Kosten für Upgrade 1 auf " + val + " Diamanten gesetzt!");
+                } else if (sub.equals("setupgrade2cost")) {
+                    getConfig().set("upgrade2_cost_diamonds", val);
+                    saveConfig();
+                    p.sendMessage(ChatColor.GREEN + "Kosten für Upgrade 2 auf " + val + " Diamanten gesetzt!");
+                }
+            } catch (NumberFormatException e) {
+                p.sendMessage(ChatColor.RED + "Bitte gib eine gültige Zahl ein.");
+            }
             return true;
         }
 
@@ -366,14 +582,138 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
     // ===== EVENTS =====
 
     @EventHandler(priority = EventPriority.HIGH)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        Player p = event.getEntity();
+        int upgradeLevel = getUpgradeLevel(p.getUniqueId());
+
+        // UPGRADE 2: Unverlierbar
+        if (upgradeLevel >= 2) {
+            // Aus Drops entfernen
+            event.getDrops().removeIf(this::isBackpackItem);
+            dataConfig.set("hidden." + p.getUniqueId(), true);
+            saveDataConfig();
+            p.sendMessage(ChatColor.LIGHT_PURPLE + "Dein Rucksack ist dank Upgrade 2 sicher bei dir geblieben!");
+            return;
+        }
+
+        // STANDARD / UPGRADE 1: Droppen & Versterben
+        boolean hadBackpack = hasBackpackInInventory(p) || dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
+
+        if (hadBackpack) {
+            dataConfig.set("hidden." + p.getUniqueId(), false);
+            setLostOnDeath(p.getUniqueId(), true);
+
+            // Falls versteckt, als Drop erzeugen
+            if (!hasBackpackInInventory(p)) {
+                event.getDrops().add(createBackpackItem(p.getUniqueId()));
+            }
+
+            p.sendMessage(ChatColor.RED + "Dein Rucksack ist an deinem Todesort gedroppt!");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onEntityPickupItem(EntityPickupItemEvent event) {
+        if (!(event.getEntity() instanceof Player)) return;
+        Player p = (Player) event.getEntity();
+        ItemStack stack = event.getItem().getItemStack();
+
+        if (isBackpackItem(stack)) {
+            String owner = getBackpackOwner(stack);
+            if (owner != null && owner.equals(p.getUniqueId().toString())) {
+                if (isLostOnDeath(p.getUniqueId())) {
+                    setLostOnDeath(p.getUniqueId(), false);
+                    p.sendMessage(ChatColor.GREEN + "Du hast deinen Rucksack wieder aufgesammelt! Alle Funktionen sind freigeschaltet.");
+                    p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.2f);
+                }
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onItemDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Item)) return;
+        Item itemEntity = (Item) event.getEntity();
+        ItemStack stack = itemEntity.getItemStack();
+
+        if (isBackpackItem(stack)) {
+            String owner = getBackpackOwner(stack);
+            if (owner != null) {
+                UUID ownerUuid = UUID.fromString(owner);
+                if (getUpgradeLevel(ownerUuid) >= 1) {
+                    // UPGRADE 1: Schützt vor Lava, Feuer, Explosionen
+                    event.setCancelled(true);
+                }
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onItemDespawn(ItemDespawnEvent event) {
+        ItemStack stack = event.getEntity().getItemStack();
+        if (isBackpackItem(stack)) {
+            String owner = getBackpackOwner(stack);
+            if (owner != null) {
+                UUID ownerUuid = UUID.fromString(owner);
+                if (getUpgradeLevel(ownerUuid) >= 1) {
+                    // UPGRADE 1: Verhindert Despawning
+                    event.setCancelled(true);
+                }
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
     public void onInventoryClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
+        // Shop GUI Handler
+        if (event.getView().getTitle().equals(SHOP_TITLE)) {
+            event.setCancelled(true);
+            int slot = event.getRawSlot();
+            int level = getUpgradeLevel(p.getUniqueId());
+
+            int cost1 = getConfig().getInt("upgrade1_cost_diamonds", 128);
+            int cost2 = getConfig().getInt("upgrade2_cost_diamonds", 256);
+
+            if (slot == 11) { // Upgrade 1
+                if (level >= 1) {
+                    p.sendMessage(ChatColor.GREEN + "Du hast Upgrade 1 bereits freigeschaltet!");
+                    return;
+                }
+                if (removeDiamonds(p, cost1)) {
+                    setUpgradeLevel(p.getUniqueId(), 1);
+                    p.sendMessage(ChatColor.GREEN + "Glückwunsch! Du hast Upgrade 1 (Unzerstörbar) gekauft!");
+                    p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+                    openShopGUI(p);
+                } else {
+                    p.sendMessage(ChatColor.RED + "Du benötigst " + cost1 + " Diamanten in deinem Inventar!");
+                }
+            } else if (slot == 15) { // Upgrade 2
+                if (level < 1) {
+                    p.sendMessage(ChatColor.RED + "Du musst zuerst Upgrade 1 freischalten!");
+                    return;
+                }
+                if (level >= 2) {
+                    p.sendMessage(ChatColor.GREEN + "Du hast bereits das maximale Upgrade!");
+                    return;
+                }
+                if (removeDiamonds(p, cost2)) {
+                    setUpgradeLevel(p.getUniqueId(), 2);
+                    p.sendMessage(ChatColor.LIGHT_PURPLE + "Glückwunsch! Du hast Upgrade 2 (Unverlierbar) gekauft!");
+                    p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+                    openShopGUI(p);
+                } else {
+                    p.sendMessage(ChatColor.RED + "Du benötigst " + cost2 + " Diamanten in deinem Inventar!");
+                }
+            }
+            return;
+        }
+
         ItemStack current = event.getCurrentItem();
         ItemStack cursor = event.getCursor();
 
-        // 1. Verhindern, dass der Rucksack per Drag/Drop auf den Helm-Slot platziert wird
         if (event.getSlotType() == InventoryType.SlotType.ARMOR && event.getRawSlot() == 5) {
             if (isBackpackItem(cursor)) {
                 event.setCancelled(true);
@@ -382,24 +722,25 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             }
         }
 
-        // 2. Interaktionen mit dem Rucksack-Item im Inventar
         if (isBackpackItem(current)) {
             ClickType click = event.getClick();
 
-            // Shift-Klick verhindern (damit er nicht automatisch auf den Kopf gerüstet wird)
             if (event.isShiftClick()) {
                 event.setCancelled(true);
                 return;
             }
 
-            // Linksklick: Erlaubt normales Bewegen/Greifen des Items (nichts weiter tun)
             if (click == ClickType.LEFT) {
                 return; 
             }
 
-            // Rechtsklick oder Q-Taste: Rucksack-Interface öffnen
             if (click == ClickType.RIGHT || click == ClickType.DROP || click == ClickType.CONTROL_DROP) {
                 event.setCancelled(true);
+
+                if (isLostOnDeath(p.getUniqueId())) {
+                    p.sendMessage(ChatColor.RED + "Dein Rucksack ist gesperrt!");
+                    return;
+                }
 
                 Bukkit.getScheduler().runTask(this, () -> {
                     p.closeInventory();
@@ -416,7 +757,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = event.getPlayer();
         ItemStack item = event.getItem();
 
-        // Linksklick-Abbau auf eine Rucksack-Kiste
         if (event.getAction() == Action.LEFT_CLICK_BLOCK && event.getClickedBlock() != null) {
             Block block = event.getClickedBlock();
             if (block.getType() == Material.CHEST && block.getState() instanceof Chest) {
@@ -442,9 +782,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (!isBackpackItem(item)) return;
 
-        // Normaler Rechtsklick (In die Luft oder Klick ohne Shift auf einen Block)
         if (event.getAction() == Action.RIGHT_CLICK_AIR || (event.getAction() == Action.RIGHT_CLICK_BLOCK && !p.isSneaking())) {
             event.setCancelled(true);
+            if (isLostOnDeath(p.getUniqueId())) {
+                p.sendMessage(ChatColor.RED + "Dein Rucksack ist gesperrt, bis du ihn am Todesort aufgesammelt hast!");
+                return;
+            }
             Inventory inv = getBackpackInventory(p.getUniqueId());
             p.openInventory(inv);
             p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 1.0f, 1.0f);
@@ -457,6 +800,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         ItemStack item = event.getItemInHand();
 
         if (!isBackpackItem(item)) return;
+
+        if (isLostOnDeath(p.getUniqueId())) {
+            event.setCancelled(true);
+            p.sendMessage(ChatColor.RED + "Dein Rucksack ist gesperrt!");
+            return;
+        }
 
         if (!p.isSneaking()) {
             event.setCancelled(true);
@@ -566,6 +915,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             list.add("show");
             list.add("hide");
             list.add("recover");
+        } else if (command.getName().equalsIgnoreCase("backpack") && args.length == 1) {
+            list.add("menu");
+        } else if (command.getName().equalsIgnoreCase("bpadmin") && args.length == 1) {
+            list.add("setcooldown");
+            list.add("setupgrade1cost");
+            list.add("setupgrade2cost");
         }
         return list;
     }
