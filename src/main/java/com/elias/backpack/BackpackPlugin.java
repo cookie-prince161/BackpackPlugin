@@ -107,7 +107,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpadmin").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.2.3 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.2.6 erfolgreich aktiviert!");
     }
 
     @Override
@@ -299,17 +299,28 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
     public void clearBackpackContents(UUID ownerUuid) {
         Inventory inv = getBackpackInventory(ownerUuid);
+
+        boolean wasNotEmpty = false;
+        for (ItemStack item : inv.getContents()) {
+            if (item != null && item.getType() != Material.AIR) {
+                wasNotEmpty = true;
+                break;
+            }
+        }
+
         inv.clear();
         saveBackpack(ownerUuid, inv);
 
-        Player owner = Bukkit.getPlayer(ownerUuid);
-        if (owner != null && owner.isOnline()) {
-            owner.sendMessage(ChatColor.RED + "Dein Rucksack wurde zerstört! Da du kein Upgrade 1 hast, wurden alle Inhalte darin GELÖSCHT.");
-            owner.playSound(owner.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+        if (wasNotEmpty) {
+            Player owner = Bukkit.getPlayer(ownerUuid);
+            if (owner != null && owner.isOnline()) {
+                owner.sendMessage(ChatColor.RED + "Dein Rucksack wurde zerstört! Da du kein Upgrade 1 hast, wurden alle Inhalte darin GELÖSCHT.");
+                owner.playSound(owner.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+            }
         }
     }
 
-    // ===== CUSTOM INVSEE GUI (DOPPELKISTE) =====
+    // ===== CUSTOM INVSEE GUI =====
 
     public Inventory createCustomInvseeGUI(Player target) {
         Inventory gui = Bukkit.createInventory(null, 54, ADMIN_INV_PREFIX + target.getName());
@@ -350,10 +361,10 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
 
         ItemStack[] armor = new ItemStack[4];
-        armor[3] = gui.getItem(36); // Helm
-        armor[2] = gui.getItem(37); // Chestplate
-        armor[1] = gui.getItem(38); // Hose
-        armor[0] = gui.getItem(39); // Schuhe
+        armor[3] = gui.getItem(36);
+        armor[2] = gui.getItem(37);
+        armor[1] = gui.getItem(38);
+        armor[0] = gui.getItem(39);
         target.getInventory().setArmorContents(armor);
 
         target.getInventory().setItemInOffHand(gui.getItem(44));
@@ -365,16 +376,11 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         String type = item.getType().name();
 
         switch (slot) {
-            case 36: // Helm
-                return type.endsWith("_HELMET") || type.endsWith("_HEAD") || type.endsWith("_SKULL") || type.equals("TURTLE_HELMET");
-            case 37: // Brustplatte
-                return type.endsWith("_CHESTPLATE") || type.equals("ELYTRA");
-            case 38: // Hose
-                return type.endsWith("_LEGGINGS");
-            case 39: // Schuhe
-                return type.endsWith("_BOOTS");
-            default:
-                return true;
+            case 36: return type.endsWith("_HELMET") || type.endsWith("_HEAD") || type.endsWith("_SKULL") || type.equals("TURTLE_HELMET");
+            case 37: return type.endsWith("_CHESTPLATE") || type.equals("ELYTRA");
+            case 38: return type.endsWith("_LEGGINGS");
+            case 39: return type.endsWith("_BOOTS");
+            default: return true;
         }
     }
 
@@ -810,7 +816,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             if (owner != null && owner.equals(p.getUniqueId().toString())) {
                 if (isLostOnDeath(p.getUniqueId())) {
                     setLostOnDeath(p.getUniqueId(), false);
-                    p.sendMessage(ChatColor.GREEN + "Du hast deinen Rucksack wieder aufgesammelt! Alle Funktionen sind freigeschaltet.");
+                    p.sendMessage(ChatColor.GREEN + "Dein Rucksack wieder aufgesammelt! Alle Funktionen sind freigeschaltet.");
                     p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.2f);
                 }
             }
@@ -822,17 +828,15 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
-        // 1. RÜSTUNGSSLOT-PRÜFUNG IM CUSTOM INVSEE
+        // 1. CUSTOM INVSEE GUI
         if (event.getView().getTitle().startsWith(ADMIN_INV_PREFIX)) {
             int slot = event.getRawSlot();
 
-            // Blockiert Klicks auf Glas-Panes
             if (slot >= 36 && slot < 54 && slot != 44 && slot > 39) {
                 event.setCancelled(true);
                 return;
             }
 
-            // Prüfe Rüstungsslots 36-39
             if (slot >= 36 && slot <= 39) {
                 ItemStack cursor = event.getCursor();
                 if (!isValidArmorForSlot(slot, cursor)) {
@@ -932,7 +936,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             if (click == ClickType.RIGHT || click == ClickType.DROP || click == ClickType.CONTROL_DROP) {
                 event.setCancelled(true);
 
-                // TOGGLE-LOGIK: Wenn Backpack-GUI bereits offen ist -> Schließen
+                // Wenn Rucksack-GUI offen ist -> Schließen beim erneuten Rechtsklick
                 if (event.getView().getTitle().equals(GUI_TITLE)) {
                     p.closeInventory();
                     p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 0.8f, 0.8f);
