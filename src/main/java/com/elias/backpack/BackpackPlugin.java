@@ -107,7 +107,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpadmin").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.2.1 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.2.2 erfolgreich aktiviert!");
     }
 
     @Override
@@ -297,20 +297,27 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // ===== CUSTOM INVSEE GUI (DOPPELKISTE) =====
+    public void clearBackpackContents(UUID ownerUuid) {
+        Inventory inv = getBackpackInventory(ownerUuid);
+        inv.clear();
+        saveBackpack(ownerUuid, inv);
+    }
+
+    // ===== CUSTOM INVSEE GUI (DOPPELKISTE MIT LIVE SYNCHRONISATION) =====
 
     public Inventory createCustomInvseeGUI(Player target) {
         Inventory gui = Bukkit.createInventory(null, 54, ADMIN_INV_PREFIX + target.getName());
+        updateInvseeGUIContents(gui, target);
+        return gui;
+    }
+
+    private void updateInvseeGUIContents(Inventory gui, Player target) {
         ItemStack[] contents = target.getInventory().getContents();
 
-        // Slots 0 bis 35: Haupt-Inventar + Hotbar
         for (int i = 0; i < 36 && i < contents.length; i++) {
-            if (contents[i] != null) {
-                gui.setItem(i, contents[i].clone());
-            }
+            gui.setItem(i, contents[i] != null ? contents[i].clone() : null);
         }
 
-        // Platzhalter Glass Panes für untere Hälfte
         ItemStack glass = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
         ItemMeta glassMeta = glass.getItemMeta();
         if (glassMeta != null) {
@@ -321,17 +328,33 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             gui.setItem(i, glass);
         }
 
-        // Rüstungsslots & Zweithand
         ItemStack[] armor = target.getInventory().getArmorContents();
-        gui.setItem(36, armor[3] != null ? armor[3] : null); // Helm
-        gui.setItem(37, armor[2] != null ? armor[2] : null); // Brustplatte
-        gui.setItem(38, armor[1] != null ? armor[1] : null); // Hose
-        gui.setItem(39, armor[0] != null ? armor[0] : null); // Schuhe
+        gui.setItem(36, armor[3] != null ? armor[3].clone() : null); // Helm
+        gui.setItem(37, armor[2] != null ? armor[2].clone() : null); // Brustplatte
+        gui.setItem(38, armor[1] != null ? armor[1].clone() : null); // Hose
+        gui.setItem(39, armor[0] != null ? armor[0].clone() : null); // Schuhe
 
         ItemStack offhand = target.getInventory().getItemInOffHand();
-        gui.setItem(44, (offhand != null && offhand.getType() != Material.AIR) ? offhand : null); // Zweithand
+        gui.setItem(44, (offhand != null && offhand.getType() != Material.AIR) ? offhand.clone() : null); // Offhand
+    }
 
-        return gui;
+    private void syncInvseeToPlayer(Inventory gui, Player target) {
+        // Sync Slots 0 bis 35 (Haupt-Inv + Hotbar)
+        for (int i = 0; i < 36; i++) {
+            target.getInventory().setItem(i, gui.getItem(i));
+        }
+
+        // Sync Rüstung
+        ItemStack[] armor = new ItemStack[4];
+        armor[3] = gui.getItem(36); // Helm
+        armor[2] = gui.getItem(37); // Chestplate
+        armor[1] = gui.getItem(38); // Hose
+        armor[0] = gui.getItem(39); // Schuhe
+        target.getInventory().setArmorContents(armor);
+
+        // Sync Offhand
+        target.getInventory().setItemInOffHand(gui.getItem(44));
+        target.updateInventory();
     }
 
     // ===== SHOP GUI MIT TOGGLE =====
@@ -346,7 +369,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         boolean dis1 = isUpgradeDisabled(p.getUniqueId(), 1);
         boolean dis2 = isUpgradeDisabled(p.getUniqueId(), 2);
 
-        // Upgrade 1
         ItemStack up1 = new ItemStack(level >= 1 ? (dis1 ? Material.RED_DYE : Material.LIME_DYE) : Material.ANVIL);
         ItemMeta meta1 = up1.getItemMeta();
         if (meta1 != null) {
@@ -366,7 +388,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
         shop.setItem(11, up1);
 
-        // Upgrade 2
         ItemStack up2 = new ItemStack(level >= 2 ? (dis2 ? Material.RED_DYE : Material.NETHER_STAR) : Material.BARRIER);
         ItemMeta meta2 = up2.getItemMeta();
         if (meta2 != null) {
@@ -545,9 +566,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 destroyPlacedBackpackBlocks(p.getUniqueId());
                 removeAllBackpackItems(p);
 
-                Inventory inv = getBackpackInventory(p.getUniqueId());
-                inv.clear();
-                saveBackpack(p.getUniqueId(), inv);
+                clearBackpackContents(p.getUniqueId());
 
                 setLostOnDeath(p.getUniqueId(), false);
                 dataConfig.set("hidden." + p.getUniqueId(), true);
@@ -560,7 +579,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             }
 
             if (action.equals("recover")) {
-                // WARNUNG NUR WENN DER RUCKSACK DURCH TOD VERLOREN GEGANGEN IST
+                // WARNUNG NUR WENN DAS ITEM AM TODESORT LIEGT
                 if (isLostOnDeath(p.getUniqueId())) {
                     pendingConfirmations.add(p.getUniqueId());
 
@@ -580,7 +599,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                // Normaler Recover (z. B. verbrannt/despawnt/verloren ohne Todessperre)
+                // Normaler Recover (z. B. verbrannt ohne Upgrade 1)
                 long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
                 long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
                 long now = System.currentTimeMillis();
@@ -636,7 +655,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 p.openInventory(createCustomInvseeGUI(targetOnline));
                 p.sendMessage(ChatColor.GREEN + "Öffne Inventar von " + targetOnline.getName());
             } else {
-                p.sendMessage(ChatColor.RED + "Spieler wurde nicht gefunden oder ist offline.");
+                p.sendMessage(ChatColor.RED + "Spieler ist nicht online.");
             }
             return true;
         }
@@ -658,7 +677,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 p.openInventory(targetOnline.getEnderChest());
                 p.sendMessage(ChatColor.GREEN + "Öffne Enderchest von " + targetOnline.getName());
             } else {
-                p.sendMessage(ChatColor.RED + "Spieler nicht gefunden.");
+                p.sendMessage(ChatColor.RED + "Spieler ist nicht online.");
             }
             return true;
         }
@@ -701,6 +720,45 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
     }
 
     // ===== EVENTS =====
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onItemDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Item)) return;
+        Item itemEntity = (Item) event.getEntity();
+        ItemStack stack = itemEntity.getItemStack();
+
+        if (isBackpackItem(stack)) {
+            String owner = getBackpackOwner(stack);
+            if (owner != null) {
+                UUID ownerUuid = UUID.fromString(owner);
+                if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
+                    // UPGRADE 1 AKTIV: Verhindert Verbrennen in Lava/Feuer
+                    event.setCancelled(true);
+                } else {
+                    // KEIN UPGRADE 1: Item wird verbrannt -> Inhalt aus der Datei löschen!
+                    clearBackpackContents(ownerUuid);
+                }
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onItemDespawn(ItemDespawnEvent event) {
+        ItemStack stack = event.getEntity().getItemStack();
+        if (isBackpackItem(stack)) {
+            String owner = getBackpackOwner(stack);
+            if (owner != null) {
+                UUID ownerUuid = UUID.fromString(owner);
+                if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
+                    // UPGRADE 1 AKTIV: Verhindert Despawn
+                    event.setCancelled(true);
+                } else {
+                    // KEIN UPGRADE 1: Despawnt -> Inhalt löschen!
+                    clearBackpackContents(ownerUuid);
+                }
+            }
+        }
+    }
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onPlayerDeath(PlayerDeathEvent event) {
@@ -748,46 +806,27 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
     }
 
     @EventHandler(priority = EventPriority.HIGH)
-    public void onItemDamage(EntityDamageEvent event) {
-        if (!(event.getEntity() instanceof Item)) return;
-        Item itemEntity = (Item) event.getEntity();
-        ItemStack stack = itemEntity.getItemStack();
-
-        if (isBackpackItem(stack)) {
-            String owner = getBackpackOwner(stack);
-            if (owner != null) {
-                UUID ownerUuid = UUID.fromString(owner);
-                if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
-                    event.setCancelled(true);
-                }
-            }
-        }
-    }
-
-    @EventHandler(priority = EventPriority.HIGH)
-    public void onItemDespawn(ItemDespawnEvent event) {
-        ItemStack stack = event.getEntity().getItemStack();
-        if (isBackpackItem(stack)) {
-            String owner = getBackpackOwner(stack);
-            if (owner != null) {
-                UUID ownerUuid = UUID.fromString(owner);
-                if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
-                    event.setCancelled(true);
-                }
-            }
-        }
-    }
-
-    @EventHandler(priority = EventPriority.HIGH)
     public void onInventoryClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
-        // BLOCKIEREN VON KICKS AUF PLATZHALTER IM CUSTOM INVSEE
+        // LIVE SYNCHRONISIERUNG FÜR /INVSEE
         if (event.getView().getTitle().startsWith(ADMIN_INV_PREFIX)) {
             int slot = event.getRawSlot();
-            if (slot >= 36 && slot < 54 && slot != 44 && slot > 39) { // Blockiert Glas-Panes
+            // Verhindert Klicks auf schwarze Glass Panes
+            if (slot >= 36 && slot < 54 && slot != 44 && slot > 39) {
                 event.setCancelled(true);
+                return;
+            }
+
+            String targetName = event.getView().getTitle().replace(ADMIN_INV_PREFIX, "");
+            Player target = Bukkit.getPlayer(targetName);
+
+            if (target != null) {
+                // Synchronisiere einen Tick später direkt mit dem Inventar des Ziel-Spielers
+                Bukkit.getScheduler().runTask(this, () -> {
+                    syncInvseeToPlayer(event.getInventory(), target);
+                });
             }
             return;
         }
