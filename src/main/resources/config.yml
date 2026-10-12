@@ -1,0 +1,10 @@
+# Standard-Einstellungen für das BackpackPlugin
+
+# Cooldown für /bpitem recover in Sekunden (Standard: 300 Sekunden = 5 Minuten)
+recover_cooldown_seconds: 300
+
+# Diamanten-Kosten für Upgrade 1 (Unzerstörbar) - Standard: 2 Stacks (128)
+upgrade1_cost_diamonds: 128
+
+# Diamanten-Kosten für Upgrade 2 (Unverlierbar) - Standard: 4 Stacks (256)
+upgrade2_cost_diamonds: 256
