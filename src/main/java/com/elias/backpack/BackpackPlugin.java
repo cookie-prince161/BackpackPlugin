@@ -63,7 +63,8 @@ import java.util.UUID;
 public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
 
     private static final String GUI_TITLE = ChatColor.DARK_GRAY + "Dein Rucksack";
-    private static final String ADMIN_GUI_PREFIX = ChatColor.DARK_RED + "Rucksack: ";
+    private static final String ADMIN_BP_PREFIX = ChatColor.DARK_RED + "Rucksack: ";
+    private static final String ADMIN_INV_PREFIX = ChatColor.DARK_RED + "Inventar: ";
     private static final String SHOP_TITLE = ChatColor.DARK_BLUE + "Rucksack Upgrades";
     private static final String CHEST_HEAD_URL = "http://textures.minecraft.net/texture/d5c6dc2bbf51c36cfc7714585a6a5683ef2b14d47d8ff714654a893f5da622";
 
@@ -106,7 +107,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpadmin").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.2.0 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.2.1 erfolgreich aktiviert!");
     }
 
     @Override
@@ -179,7 +180,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         saveDataConfig();
     }
 
-    // ===== ITEM CREATION =====
+    // ===== ITEM CREATION & LIVE UPDATES =====
 
     public ItemStack createBackpackItem(UUID ownerUuid) {
         ItemStack head = new ItemStack(Material.PLAYER_HEAD);
@@ -213,6 +214,15 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
         head.setItemMeta(meta);
         return head;
+    }
+
+    public void updateBackpackItemsInInventory(Player p) {
+        for (int i = 0; i < p.getInventory().getSize(); i++) {
+            ItemStack item = p.getInventory().getItem(i);
+            if (isBackpackItem(item)) {
+                p.getInventory().setItem(i, createBackpackItem(p.getUniqueId()));
+            }
+        }
     }
 
     public boolean isBackpackItem(ItemStack item) {
@@ -285,6 +295,43 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             dataConfig.set("placed_chests." + targetUuid, null);
             saveDataConfig();
         }
+    }
+
+    // ===== CUSTOM INVSEE GUI (DOPPELKISTE) =====
+
+    public Inventory createCustomInvseeGUI(Player target) {
+        Inventory gui = Bukkit.createInventory(null, 54, ADMIN_INV_PREFIX + target.getName());
+        ItemStack[] contents = target.getInventory().getContents();
+
+        // Slots 0 bis 35: Haupt-Inventar + Hotbar
+        for (int i = 0; i < 36 && i < contents.length; i++) {
+            if (contents[i] != null) {
+                gui.setItem(i, contents[i].clone());
+            }
+        }
+
+        // Platzhalter Glass Panes für untere Hälfte
+        ItemStack glass = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
+        ItemMeta glassMeta = glass.getItemMeta();
+        if (glassMeta != null) {
+            glassMeta.setDisplayName(ChatColor.BLACK + " ");
+            glass.setItemMeta(glassMeta);
+        }
+        for (int i = 36; i < 54; i++) {
+            gui.setItem(i, glass);
+        }
+
+        // Rüstungsslots & Zweithand
+        ItemStack[] armor = target.getInventory().getArmorContents();
+        gui.setItem(36, armor[3] != null ? armor[3] : null); // Helm
+        gui.setItem(37, armor[2] != null ? armor[2] : null); // Brustplatte
+        gui.setItem(38, armor[1] != null ? armor[1] : null); // Hose
+        gui.setItem(39, armor[0] != null ? armor[0] : null); // Schuhe
+
+        ItemStack offhand = target.getInventory().getItemInOffHand();
+        gui.setItem(44, (offhand != null && offhand.getType() != Material.AIR) ? offhand : null); // Zweithand
+
+        return gui;
     }
 
     // ===== SHOP GUI MIT TOGGLE =====
@@ -423,7 +470,9 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 }
 
                 boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
-                if (!hasBackpackInInventory(p) && !isHidden) {
+                boolean inInv = hasBackpackInInventory(p);
+
+                if (!inInv && !isHidden) {
                     p.sendMessage(ChatColor.RED + "Du hast deinen Rucksack weder im Inventar noch versteckt! (/bp show)");
                     return true;
                 }
@@ -466,8 +515,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
-                if (!isHidden) {
+                if (hasBackpackInInventory(p)) {
                     p.sendMessage(ChatColor.RED + "Dein Rucksack ist bereits in deinem Inventar!");
                     return true;
                 }
@@ -505,32 +553,21 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 dataConfig.set("hidden." + p.getUniqueId(), true);
                 saveDataConfig();
 
-                p.sendMessage(ChatColor.YELLOW + "Dein Rucksack wurde wiederhergestellt & versteckt. Der Inhalt wurde wie angekündigt GELÖSCHT.");
+                p.sendMessage(ChatColor.YELLOW + "Dein Rucksack wurde wiederhergestellt & versteckt. Der Inhalt wurde GELÖSCHT.");
                 p.sendMessage(ChatColor.GREEN + "Nutze /bp zum Öffnen oder /bp show, um das Item ins Inventar zu holen.");
                 p.playSound(p.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
                 return true;
             }
 
             if (action.equals("recover")) {
-                long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
-                long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
-                long now = System.currentTimeMillis();
-
-                if ((now - lastUsed) < (cooldownSec * 1000)) {
-                    long remaining = (cooldownSec * 1000 - (now - lastUsed)) / 1000;
-                    p.sendMessage(ChatColor.RED + "Du musst noch " + remaining + " Sekunden warten, bevor du wieder recovern kannst!");
-                    return true;
-                }
-
-                int upLevel = getEffectiveUpgradeLevel(p.getUniqueId());
-
-                if (upLevel < 2) {
+                // WARNUNG NUR WENN DER RUCKSACK DURCH TOD VERLOREN GEGANGEN IST
+                if (isLostOnDeath(p.getUniqueId())) {
                     pendingConfirmations.add(p.getUniqueId());
 
                     p.sendMessage(ChatColor.RED + "========================================");
                     p.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "WARNUNG:");
-                    p.sendMessage(ChatColor.RED + "Wenn du deinen Rucksack jetzt recoverst, werden ALLE INHALTE darin GELÖSCHT!");
-                    p.sendMessage(ChatColor.RED + "Er wird dir anschließend im versteckten Modus gutgeschrieben.");
+                    p.sendMessage(ChatColor.RED + "Dein Rucksack liegt noch am Todesort.");
+                    p.sendMessage(ChatColor.RED + "Wenn du ihn jetzt recoverst, werden ALLE INHALTE darin GELÖSCHT!");
 
                     TextComponent confirmButton = new TextComponent("[Ja, ich bestätige]");
                     confirmButton.setColor(ChatColor.RED);
@@ -540,6 +577,17 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
                     p.spigot().sendMessage(confirmButton);
                     p.sendMessage(ChatColor.RED + "========================================");
+                    return true;
+                }
+
+                // Normaler Recover (z. B. verbrannt/despawnt/verloren ohne Todessperre)
+                long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
+                long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
+                long now = System.currentTimeMillis();
+
+                if ((now - lastUsed) < (cooldownSec * 1000)) {
+                    long remaining = (cooldownSec * 1000 - (now - lastUsed)) / 1000;
+                    p.sendMessage(ChatColor.RED + "Du musst noch " + remaining + " Sekunden warten, bevor du wieder recovern kannst!");
                     return true;
                 }
 
@@ -562,9 +610,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 OfflinePlayer target = Bukkit.getOfflinePlayer(args[0]);
                 if (target.hasPlayedBefore() || target.isOnline()) {
                     Inventory targetBp = getBackpackInventory(target.getUniqueId());
-                    Inventory adminView = Bukkit.createInventory(null, 27, ADMIN_GUI_PREFIX + target.getName());
-                    adminView.setContents(targetBp.getContents());
-                    p.openInventory(adminView);
+                    p.openInventory(targetBp);
                     p.sendMessage(ChatColor.GOLD + "Öffne den Rucksack von " + target.getName() + "...");
                     return true;
                 }
@@ -587,15 +633,10 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
             Player targetOnline = Bukkit.getPlayer(args[0]);
             if (targetOnline != null) {
-                p.openInventory(targetOnline.getInventory());
-                p.sendMessage(ChatColor.GREEN + "Öffne das Inventar von " + targetOnline.getName());
+                p.openInventory(createCustomInvseeGUI(targetOnline));
+                p.sendMessage(ChatColor.GREEN + "Öffne Inventar von " + targetOnline.getName());
             } else {
-                OfflinePlayer targetOffline = Bukkit.getOfflinePlayer(args[0]);
-                if (targetOffline.hasPlayedBefore()) {
-                    p.sendMessage(ChatColor.YELLOW + "Spieler " + targetOffline.getName() + " ist offline.");
-                } else {
-                    p.sendMessage(ChatColor.RED + "Spieler wurde nicht gefunden.");
-                }
+                p.sendMessage(ChatColor.RED + "Spieler wurde nicht gefunden oder ist offline.");
             }
             return true;
         }
@@ -617,12 +658,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 p.openInventory(targetOnline.getEnderChest());
                 p.sendMessage(ChatColor.GREEN + "Öffne Enderchest von " + targetOnline.getName());
             } else {
-                OfflinePlayer targetOffline = Bukkit.getOfflinePlayer(args[0]);
-                if (targetOffline.hasPlayedBefore()) {
-                    p.sendMessage(ChatColor.YELLOW + "Spieler " + targetOffline.getName() + " ist offline.");
-                } else {
-                    p.sendMessage(ChatColor.RED + "Spieler nicht gefunden.");
-                }
+                p.sendMessage(ChatColor.RED + "Spieler nicht gefunden.");
             }
             return true;
         }
@@ -747,6 +783,15 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
+        // BLOCKIEREN VON KICKS AUF PLATZHALTER IM CUSTOM INVSEE
+        if (event.getView().getTitle().startsWith(ADMIN_INV_PREFIX)) {
+            int slot = event.getRawSlot();
+            if (slot >= 36 && slot < 54 && slot != 44 && slot > 39) { // Blockiert Glas-Panes
+                event.setCancelled(true);
+            }
+            return;
+        }
+
         // SHOP GUI HANDLER
         if (event.getView().getTitle().equals(SHOP_TITLE)) {
             event.setCancelled(true);
@@ -761,6 +806,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     toggleUpgradeDisabled(p.getUniqueId(), 1);
                     boolean dis = isUpgradeDisabled(p.getUniqueId(), 1);
                     p.sendMessage(dis ? ChatColor.YELLOW + "Upgrade 1 wurde DEAKTIVIERT." : ChatColor.GREEN + "Upgrade 1 wurde AKTIVIERT.");
+                    updateBackpackItemsInInventory(p);
                     openShopGUI(p);
                     return;
                 }
@@ -768,6 +814,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     setUpgradeLevel(p.getUniqueId(), 1);
                     p.sendMessage(ChatColor.GREEN + "Glückwunsch! Du hast Upgrade 1 (Unzerstörbar) gekauft!");
                     p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+                    updateBackpackItemsInInventory(p);
                     openShopGUI(p);
                 } else {
                     p.sendMessage(ChatColor.RED + "Du benötigst " + cost1 + " Diamanten in deinem Inventar!");
@@ -777,6 +824,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     toggleUpgradeDisabled(p.getUniqueId(), 2);
                     boolean dis = isUpgradeDisabled(p.getUniqueId(), 2);
                     p.sendMessage(dis ? ChatColor.YELLOW + "Upgrade 2 wurde DEAKTIVIERT." : ChatColor.LIGHT_PURPLE + "Upgrade 2 wurde AKTIVIERT.");
+                    updateBackpackItemsInInventory(p);
                     openShopGUI(p);
                     return;
                 }
@@ -788,6 +836,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     setUpgradeLevel(p.getUniqueId(), 2);
                     p.sendMessage(ChatColor.LIGHT_PURPLE + "Glückwunsch! Du hast Upgrade 2 (Unverlierbar) gekauft!");
                     p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+                    updateBackpackItemsInInventory(p);
                     openShopGUI(p);
                 } else {
                     p.sendMessage(ChatColor.RED + "Du benötigst " + cost2 + " Diamanten in deinem Inventar!");
@@ -979,8 +1028,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             saveBackpack(p.getUniqueId(), event.getInventory());
             openBackpacks.remove(p.getUniqueId());
             p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 0.8f, 0.8f);
-        } else if (event.getView().getTitle().startsWith(ADMIN_GUI_PREFIX)) {
-            String targetName = event.getView().getTitle().replace(ADMIN_GUI_PREFIX, "");
+        } else if (event.getView().getTitle().startsWith(ADMIN_BP_PREFIX)) {
+            String targetName = event.getView().getTitle().replace(ADMIN_BP_PREFIX, "");
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
             if (target.hasPlayedBefore() || target.isOnline()) {
                 saveBackpack(target.getUniqueId(), event.getInventory());
