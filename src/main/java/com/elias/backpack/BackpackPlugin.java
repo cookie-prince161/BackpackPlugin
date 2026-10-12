@@ -10,6 +10,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -62,6 +63,7 @@ import java.util.UUID;
 public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
 
     private static final String GUI_TITLE = ChatColor.DARK_GRAY + "Dein Rucksack";
+    private static final String ADMIN_GUI_PREFIX = ChatColor.DARK_RED + "Rucksack: ";
     private static final String SHOP_TITLE = ChatColor.DARK_BLUE + "Rucksack Upgrades";
     private static final String CHEST_HEAD_URL = "http://textures.minecraft.net/texture/d5c6dc2bbf51c36cfc7714585a6a5683ef2b14d47d8ff714654a893f5da622";
 
@@ -91,12 +93,20 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("backpack").setExecutor(this);
             getCommand("backpack").setTabCompleter(this);
         }
+        if (getCommand("invsee") != null) {
+            getCommand("invsee").setExecutor(this);
+            getCommand("invsee").setTabCompleter(this);
+        }
+        if (getCommand("enderchest") != null) {
+            getCommand("enderchest").setExecutor(this);
+            getCommand("enderchest").setTabCompleter(this);
+        }
         if (getCommand("bpadmin") != null) {
             getCommand("bpadmin").setExecutor(this);
             getCommand("bpadmin").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.1.1 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.2.0 erfolgreich aktiviert!");
     }
 
     @Override
@@ -139,6 +149,27 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         saveDataConfig();
     }
 
+    public boolean isUpgradeDisabled(UUID uuid, int upgrade) {
+        return dataConfig.getBoolean("disabled_upgrades." + uuid.toString() + "." + upgrade, false);
+    }
+
+    public void toggleUpgradeDisabled(UUID uuid, int upgrade) {
+        boolean curr = isUpgradeDisabled(uuid, upgrade);
+        dataConfig.set("disabled_upgrades." + uuid.toString() + "." + upgrade, !curr);
+        saveDataConfig();
+    }
+
+    public int getEffectiveUpgradeLevel(UUID uuid) {
+        int lvl = getUpgradeLevel(uuid);
+        if (lvl == 2 && isUpgradeDisabled(uuid, 2)) {
+            lvl = 1;
+        }
+        if (lvl == 1 && isUpgradeDisabled(uuid, 1)) {
+            lvl = 0;
+        }
+        return lvl;
+    }
+
     public boolean isLostOnDeath(UUID uuid) {
         return dataConfig.getBoolean("lost_on_death." + uuid.toString(), false);
     }
@@ -165,7 +196,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getLogger().warning("Ungültige Head-Texture URL!");
         }
 
-        int upgrade = getUpgradeLevel(ownerUuid);
+        int upgrade = getEffectiveUpgradeLevel(ownerUuid);
         String subTitle = upgrade == 2 ? ChatColor.LIGHT_PURPLE + " [Unverlierbar]" : (upgrade == 1 ? ChatColor.AQUA + " [Unzerstörbar]" : "");
 
         meta.setDisplayName(ChatColor.GOLD + "Rucksack" + subTitle);
@@ -256,7 +287,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // ===== SHOP GUI =====
+    // ===== SHOP GUI MIT TOGGLE =====
 
     public void openShopGUI(Player p) {
         Inventory shop = Bukkit.createInventory(null, 27, SHOP_TITLE);
@@ -265,7 +296,11 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         int cost1 = getConfig().getInt("upgrade1_cost_diamonds", 128);
         int cost2 = getConfig().getInt("upgrade2_cost_diamonds", 256);
 
-        ItemStack up1 = new ItemStack(level >= 1 ? Material.LIME_DYE : Material.ANVIL);
+        boolean dis1 = isUpgradeDisabled(p.getUniqueId(), 1);
+        boolean dis2 = isUpgradeDisabled(p.getUniqueId(), 2);
+
+        // Upgrade 1
+        ItemStack up1 = new ItemStack(level >= 1 ? (dis1 ? Material.RED_DYE : Material.LIME_DYE) : Material.ANVIL);
         ItemMeta meta1 = up1.getItemMeta();
         if (meta1 != null) {
             meta1.setDisplayName(ChatColor.AQUA + "Upgrade 1: Unzerstörbar");
@@ -274,13 +309,18 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             lore.add(ChatColor.GRAY + "Explosionen und Despawning!");
             lore.add("");
             lore.add(ChatColor.GRAY + "Kosten: " + ChatColor.GOLD + cost1 + " Diamanten");
-            lore.add(level >= 1 ? ChatColor.GREEN + "✔ Bereits freigeschaltet" : ChatColor.YELLOW + "Klicke zum Freischalten");
+            if (level >= 1) {
+                lore.add(dis1 ? ChatColor.RED + "✖ Deaktiviert (Klicken zum Aktivieren)" : ChatColor.GREEN + "✔ Aktiv (Klicken zum Deaktivieren)");
+            } else {
+                lore.add(ChatColor.YELLOW + "Klicke zum Freischalten");
+            }
             meta1.setLore(lore);
             up1.setItemMeta(meta1);
         }
         shop.setItem(11, up1);
 
-        ItemStack up2 = new ItemStack(level >= 2 ? Material.NETHER_STAR : Material.BARRIER);
+        // Upgrade 2
+        ItemStack up2 = new ItemStack(level >= 2 ? (dis2 ? Material.RED_DYE : Material.NETHER_STAR) : Material.BARRIER);
         ItemMeta meta2 = up2.getItemMeta();
         if (meta2 != null) {
             meta2.setDisplayName(ChatColor.LIGHT_PURPLE + "Upgrade 2: Unverlierbar");
@@ -289,7 +329,11 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             lore.add(ChatColor.GRAY + "sondern bleibt sicher in deinen Händen!");
             lore.add("");
             lore.add(ChatColor.GRAY + "Kosten: " + ChatColor.GOLD + cost2 + " Diamanten");
-            lore.add(level >= 2 ? ChatColor.GREEN + "✔ Bereits freigeschaltet" : (level < 1 ? ChatColor.RED + "🔒 Benötigt Upgrade 1" : ChatColor.YELLOW + "Klicke zum Freischalten"));
+            if (level >= 2) {
+                lore.add(dis2 ? ChatColor.RED + "✖ Deaktiviert (Klicken zum Aktivieren)" : ChatColor.GREEN + "✔ Aktiv (Klicken zum Deaktivieren)");
+            } else {
+                lore.add(level < 1 ? ChatColor.RED + "🔒 Benötigt Upgrade 1" : ChatColor.YELLOW + "Klicke zum Freischalten");
+            }
             meta2.setLore(lore);
             up2.setItemMeta(meta2);
         }
@@ -371,7 +415,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = (Player) sender;
         String cmd = command.getName().toLowerCase();
 
-        if (cmd.equals("backpack") || cmd.equals("bp")) {
+        if (cmd.equals("backpack") || cmd.equals("bp") || cmd.equals("bpsee")) {
             if (args.length == 0) {
                 if (isLostOnDeath(p.getUniqueId())) {
                     p.sendMessage(ChatColor.RED + "Dein Rucksack ist am Todesort verloren gegangen! Du musst ihn erst aufsammeln.");
@@ -453,12 +497,10 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 destroyPlacedBackpackBlocks(p.getUniqueId());
                 removeAllBackpackItems(p);
 
-                // Inhalt im Backpack leeren
                 Inventory inv = getBackpackInventory(p.getUniqueId());
                 inv.clear();
                 saveBackpack(p.getUniqueId(), inv);
 
-                // Im versteckten Modus wiederherstellen für maximale Sicherheit
                 setLostOnDeath(p.getUniqueId(), false);
                 dataConfig.set("hidden." + p.getUniqueId(), true);
                 saveDataConfig();
@@ -470,7 +512,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             }
 
             if (action.equals("recover")) {
-                // Cooldown prüfen
                 long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
                 long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
                 long now = System.currentTimeMillis();
@@ -481,9 +522,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                int upLevel = getUpgradeLevel(p.getUniqueId());
+                int upLevel = getEffectiveUpgradeLevel(p.getUniqueId());
 
-                // Bei Upgrade 0 und Upgrade 1 verlangt das Plugin eine Chat-Bestätigung, da der Inhalt gelöscht wird
                 if (upLevel < 2) {
                     pendingConfirmations.add(p.getUniqueId());
 
@@ -503,7 +543,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                // Upgrade 2: Unverlierbar (Keine Löschung nötig)
                 recoverCooldowns.put(p.getUniqueId(), now);
 
                 clearDroppedBackpackItems(p.getUniqueId());
@@ -518,7 +557,73 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 return true;
             }
 
-            p.sendMessage(ChatColor.RED + "Benutzung: /bp <menu|show|hide|recover>");
+            // ADMIN: Rucksack eines anderen Spielers ansehen
+            if (p.hasPermission("backpack.admin")) {
+                OfflinePlayer target = Bukkit.getOfflinePlayer(args[0]);
+                if (target.hasPlayedBefore() || target.isOnline()) {
+                    Inventory targetBp = getBackpackInventory(target.getUniqueId());
+                    Inventory adminView = Bukkit.createInventory(null, 27, ADMIN_GUI_PREFIX + target.getName());
+                    adminView.setContents(targetBp.getContents());
+                    p.openInventory(adminView);
+                    p.sendMessage(ChatColor.GOLD + "Öffne den Rucksack von " + target.getName() + "...");
+                    return true;
+                }
+            }
+
+            p.sendMessage(ChatColor.RED + "Benutzung: /bp <menu|show|hide|recover|spieler>");
+            return true;
+        }
+
+        // ADMIN COMMAND: /invsee <spieler>
+        if (cmd.equals("invsee")) {
+            if (!p.hasPermission("backpack.admin")) {
+                p.sendMessage(ChatColor.RED + "Keine Rechte.");
+                return true;
+            }
+            if (args.length == 0) {
+                p.sendMessage(ChatColor.RED + "Benutzung: /invsee <spieler>");
+                return true;
+            }
+
+            Player targetOnline = Bukkit.getPlayer(args[0]);
+            if (targetOnline != null) {
+                p.openInventory(targetOnline.getInventory());
+                p.sendMessage(ChatColor.GREEN + "Öffne das Inventar von " + targetOnline.getName());
+            } else {
+                OfflinePlayer targetOffline = Bukkit.getOfflinePlayer(args[0]);
+                if (targetOffline.hasPlayedBefore()) {
+                    p.sendMessage(ChatColor.YELLOW + "Spieler " + targetOffline.getName() + " ist offline.");
+                } else {
+                    p.sendMessage(ChatColor.RED + "Spieler wurde nicht gefunden.");
+                }
+            }
+            return true;
+        }
+
+        // COMMAND: /enderchest [spieler]
+        if (cmd.equals("enderchest") || cmd.equals("ec")) {
+            if (args.length == 0) {
+                p.openInventory(p.getEnderChest());
+                return true;
+            }
+
+            if (!p.hasPermission("backpack.admin")) {
+                p.sendMessage(ChatColor.RED + "Du hast keine Rechte, die Enderchest anderer Spieler zu sehen.");
+                return true;
+            }
+
+            Player targetOnline = Bukkit.getPlayer(args[0]);
+            if (targetOnline != null) {
+                p.openInventory(targetOnline.getEnderChest());
+                p.sendMessage(ChatColor.GREEN + "Öffne Enderchest von " + targetOnline.getName());
+            } else {
+                OfflinePlayer targetOffline = Bukkit.getOfflinePlayer(args[0]);
+                if (targetOffline.hasPlayedBefore()) {
+                    p.sendMessage(ChatColor.YELLOW + "Spieler " + targetOffline.getName() + " ist offline.");
+                } else {
+                    p.sendMessage(ChatColor.RED + "Spieler nicht gefunden.");
+                }
+            }
             return true;
         }
 
@@ -564,7 +669,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
     @EventHandler(priority = EventPriority.HIGH)
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player p = event.getEntity();
-        int upgradeLevel = getUpgradeLevel(p.getUniqueId());
+        int upgradeLevel = getEffectiveUpgradeLevel(p.getUniqueId());
 
         if (upgradeLevel >= 2) {
             event.getDrops().removeIf(this::isBackpackItem);
@@ -616,7 +721,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             String owner = getBackpackOwner(stack);
             if (owner != null) {
                 UUID ownerUuid = UUID.fromString(owner);
-                if (getUpgradeLevel(ownerUuid) >= 1) {
+                if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
                     event.setCancelled(true);
                 }
             }
@@ -630,7 +735,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             String owner = getBackpackOwner(stack);
             if (owner != null) {
                 UUID ownerUuid = UUID.fromString(owner);
-                if (getUpgradeLevel(ownerUuid) >= 1) {
+                if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
                     event.setCancelled(true);
                 }
             }
@@ -642,6 +747,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
+        // SHOP GUI HANDLER
         if (event.getView().getTitle().equals(SHOP_TITLE)) {
             event.setCancelled(true);
             int slot = event.getRawSlot();
@@ -652,7 +758,10 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
             if (slot == 11) {
                 if (level >= 1) {
-                    p.sendMessage(ChatColor.GREEN + "Du hast Upgrade 1 bereits freigeschaltet!");
+                    toggleUpgradeDisabled(p.getUniqueId(), 1);
+                    boolean dis = isUpgradeDisabled(p.getUniqueId(), 1);
+                    p.sendMessage(dis ? ChatColor.YELLOW + "Upgrade 1 wurde DEAKTIVIERT." : ChatColor.GREEN + "Upgrade 1 wurde AKTIVIERT.");
+                    openShopGUI(p);
                     return;
                 }
                 if (removeDiamonds(p, cost1)) {
@@ -664,12 +773,15 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     p.sendMessage(ChatColor.RED + "Du benötigst " + cost1 + " Diamanten in deinem Inventar!");
                 }
             } else if (slot == 15) {
-                if (level < 1) {
-                    p.sendMessage(ChatColor.RED + "Du musst zuerst Upgrade 1 freischalten!");
+                if (level >= 2) {
+                    toggleUpgradeDisabled(p.getUniqueId(), 2);
+                    boolean dis = isUpgradeDisabled(p.getUniqueId(), 2);
+                    p.sendMessage(dis ? ChatColor.YELLOW + "Upgrade 2 wurde DEAKTIVIERT." : ChatColor.LIGHT_PURPLE + "Upgrade 2 wurde AKTIVIERT.");
+                    openShopGUI(p);
                     return;
                 }
-                if (level >= 2) {
-                    p.sendMessage(ChatColor.GREEN + "Du hast bereits das maximale Upgrade!");
+                if (level < 1) {
+                    p.sendMessage(ChatColor.RED + "Du musst zuerst Upgrade 1 freischalten!");
                     return;
                 }
                 if (removeDiamonds(p, cost2)) {
@@ -867,6 +979,13 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             saveBackpack(p.getUniqueId(), event.getInventory());
             openBackpacks.remove(p.getUniqueId());
             p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 0.8f, 0.8f);
+        } else if (event.getView().getTitle().startsWith(ADMIN_GUI_PREFIX)) {
+            String targetName = event.getView().getTitle().replace(ADMIN_GUI_PREFIX, "");
+            OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
+            if (target.hasPlayedBefore() || target.isOnline()) {
+                saveBackpack(target.getUniqueId(), event.getInventory());
+                ((Player) event.getPlayer()).sendMessage(ChatColor.GREEN + "Änderungen am Rucksack von " + targetName + " gespeichert!");
+            }
         }
     }
 
@@ -890,6 +1009,17 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 list.add("show");
                 list.add("hide");
                 list.add("recover");
+                if (sender.hasPermission("backpack.admin")) {
+                    for (Player target : Bukkit.getOnlinePlayers()) {
+                        list.add(target.getName());
+                    }
+                }
+            }
+        } else if (command.getName().equalsIgnoreCase("invsee") || command.getName().equalsIgnoreCase("enderchest") || command.getName().equalsIgnoreCase("ec")) {
+            if (args.length == 1) {
+                for (Player target : Bukkit.getOnlinePlayers()) {
+                    list.add(target.getName());
+                }
             }
         } else if (command.getName().equalsIgnoreCase("bpadmin") && args.length == 1) {
             list.add("setcooldown");
