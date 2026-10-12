@@ -6,7 +6,7 @@
 
     <groupId>com.elias</groupId>
     <artifactId>BackpackPlugin</artifactId>
-    <version>1.0.0</version>
+    <version>1.2.2</version>
     <packaging>jar</packaging>
 
     <name>BackpackPlugin</name>
@@ -17,7 +17,6 @@
     </properties>
 
     <repositories>
-        <!-- PaperMC Repository -->
         <repository>
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
@@ -25,7 +24,6 @@
     </repositories>
 
     <dependencies>
-        <!-- Paper API für Minecraft 1.21 -->
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
@@ -35,6 +33,8 @@
     </dependencies>
 
     <build>
+        <!-- Sorgt dafür, dass die JAR immer schlicht BackpackPlugin.jar heißt -->
+        <finalName>BackpackPlugin</finalName>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
