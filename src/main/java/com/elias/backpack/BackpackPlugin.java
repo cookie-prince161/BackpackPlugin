@@ -30,13 +30,13 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.ItemDespawnEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -91,16 +91,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("backpack").setExecutor(this);
             getCommand("backpack").setTabCompleter(this);
         }
-        if (getCommand("bpitem") != null) {
-            getCommand("bpitem").setExecutor(this);
-            getCommand("bpitem").setTabCompleter(this);
-        }
         if (getCommand("bpadmin") != null) {
             getCommand("bpadmin").setExecutor(this);
             getCommand("bpadmin").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.1.0 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.1.1 erfolgreich aktiviert!");
     }
 
     @Override
@@ -269,7 +265,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         int cost1 = getConfig().getInt("upgrade1_cost_diamonds", 128);
         int cost2 = getConfig().getInt("upgrade2_cost_diamonds", 256);
 
-        // Upgrade 1 Item
         ItemStack up1 = new ItemStack(level >= 1 ? Material.LIME_DYE : Material.ANVIL);
         ItemMeta meta1 = up1.getItemMeta();
         if (meta1 != null) {
@@ -285,7 +280,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         }
         shop.setItem(11, up1);
 
-        // Upgrade 2 Item
         ItemStack up2 = new ItemStack(level >= 2 ? Material.NETHER_STAR : Material.BARRIER);
         ItemMeta meta2 = up2.getItemMeta();
         if (meta2 != null) {
@@ -378,59 +372,28 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         String cmd = command.getName().toLowerCase();
 
         if (cmd.equals("backpack") || cmd.equals("bp")) {
-            if (args.length > 0 && args[0].equalsIgnoreCase("menu")) {
-                openShopGUI(p);
-                return true;
-            }
-
-            if (isLostOnDeath(p.getUniqueId())) {
-                p.sendMessage(ChatColor.RED + "Dein Rucksack ist am Todesort verloren gegangen! Du musst ihn erst aufsammeln.");
-                return true;
-            }
-
-            boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
-            if (!hasBackpackInInventory(p) && !isHidden) {
-                p.sendMessage(ChatColor.RED + "Du hast deinen Rucksack weder im Inventar noch versteckt! (/bpitem show)");
-                return true;
-            }
-
-            Inventory inv = getBackpackInventory(p.getUniqueId());
-            p.openInventory(inv);
-            p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 1.0f, 1.0f);
-            return true;
-        }
-
-        if (cmd.equals("bpitem")) {
             if (args.length == 0) {
-                p.sendMessage(ChatColor.RED + "Benutzung: /bpitem <show|hide|recover>");
+                if (isLostOnDeath(p.getUniqueId())) {
+                    p.sendMessage(ChatColor.RED + "Dein Rucksack ist am Todesort verloren gegangen! Du musst ihn erst aufsammeln.");
+                    return true;
+                }
+
+                boolean isHidden = dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
+                if (!hasBackpackInInventory(p) && !isHidden) {
+                    p.sendMessage(ChatColor.RED + "Du hast deinen Rucksack weder im Inventar noch versteckt! (/bp show)");
+                    return true;
+                }
+
+                Inventory inv = getBackpackInventory(p.getUniqueId());
+                p.openInventory(inv);
+                p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 1.0f, 1.0f);
                 return true;
             }
 
             String action = args[0].toLowerCase();
 
-            if (action.equals("confirmrecover")) {
-                if (!pendingConfirmations.contains(p.getUniqueId())) {
-                    p.sendMessage(ChatColor.RED + "Du hast keine ausstehende Recover-Bestätigung.");
-                    return true;
-                }
-
-                pendingConfirmations.remove(p.getUniqueId());
-                clearDroppedBackpackItems(p.getUniqueId());
-                destroyPlacedBackpackBlocks(p.getUniqueId());
-                removeAllBackpackItems(p);
-
-                // Inhalt löschen
-                Inventory inv = getBackpackInventory(p.getUniqueId());
-                inv.clear();
-                saveBackpack(p.getUniqueId(), inv);
-
-                setLostOnDeath(p.getUniqueId(), false);
-                dataConfig.set("hidden." + p.getUniqueId(), false);
-                saveDataConfig();
-
-                p.getInventory().addItem(createBackpackItem(p.getUniqueId()));
-                p.sendMessage(ChatColor.YELLOW + "Dein Rucksack wurde wiederhergestellt. Alle darin enthaltenen Items wurden wie angekündigt GELÖSCHT.");
-                p.playSound(p.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+            if (action.equals("menu")) {
+                openShopGUI(p);
                 return true;
             }
 
@@ -479,35 +442,34 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 return true;
             }
 
-            if (action.equals("recover")) {
-                // Sperre bei Tod prüfen
-                if (isLostOnDeath(p.getUniqueId())) {
-                    int upLevel = getUpgradeLevel(p.getUniqueId());
-
-                    // Mit Upgrade 1 kann man notfall-recovern (Inhalt löscht sich)
-                    if (upLevel >= 1) {
-                        pendingConfirmations.add(p.getUniqueId());
-
-                        p.sendMessage(ChatColor.RED + "========================================");
-                        p.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "WARNUNG:");
-                        p.sendMessage(ChatColor.RED + "Dein Rucksack ist am Todesort unzerstörbar.");
-                        p.sendMessage(ChatColor.RED + "Wenn du ihn jetzt recoverst, werden ALLE INHALTE darin GELÖSCHT!");
-                        
-                        TextComponent confirmButton = new TextComponent("[Ja, ich bestätige]");
-                        confirmButton.setColor(ChatColor.RED);
-                        confirmButton.setBold(true);
-                        confirmButton.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/bpitem confirmrecover"));
-                        confirmButton.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder("Klicke hier, um den Inhalt zu löschen & Rucksack zu recovern").create()));
-
-                        p.spigot().sendMessage(confirmButton);
-                        p.sendMessage(ChatColor.RED + "========================================");
-                        return true;
-                    } else {
-                        p.sendMessage(ChatColor.RED + "Du bist gestorben! Du musst zu deinem Todesort laufen, um dein Backpack aufzusammeln.");
-                        return true;
-                    }
+            if (action.equals("confirmrecover")) {
+                if (!pendingConfirmations.contains(p.getUniqueId())) {
+                    p.sendMessage(ChatColor.RED + "Du hast keine ausstehende Recover-Bestätigung.");
+                    return true;
                 }
 
+                pendingConfirmations.remove(p.getUniqueId());
+                clearDroppedBackpackItems(p.getUniqueId());
+                destroyPlacedBackpackBlocks(p.getUniqueId());
+                removeAllBackpackItems(p);
+
+                // Inhalt im Backpack leeren
+                Inventory inv = getBackpackInventory(p.getUniqueId());
+                inv.clear();
+                saveBackpack(p.getUniqueId(), inv);
+
+                // Im versteckten Modus wiederherstellen für maximale Sicherheit
+                setLostOnDeath(p.getUniqueId(), false);
+                dataConfig.set("hidden." + p.getUniqueId(), true);
+                saveDataConfig();
+
+                p.sendMessage(ChatColor.YELLOW + "Dein Rucksack wurde wiederhergestellt & versteckt. Der Inhalt wurde wie angekündigt GELÖSCHT.");
+                p.sendMessage(ChatColor.GREEN + "Nutze /bp zum Öffnen oder /bp show, um das Item ins Inventar zu holen.");
+                p.playSound(p.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                return true;
+            }
+
+            if (action.equals("recover")) {
                 // Cooldown prüfen
                 long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
                 long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
@@ -519,27 +481,45 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
+                int upLevel = getUpgradeLevel(p.getUniqueId());
+
+                // Bei Upgrade 0 und Upgrade 1 verlangt das Plugin eine Chat-Bestätigung, da der Inhalt gelöscht wird
+                if (upLevel < 2) {
+                    pendingConfirmations.add(p.getUniqueId());
+
+                    p.sendMessage(ChatColor.RED + "========================================");
+                    p.sendMessage(ChatColor.DARK_RED + "" + ChatColor.BOLD + "WARNUNG:");
+                    p.sendMessage(ChatColor.RED + "Wenn du deinen Rucksack jetzt recoverst, werden ALLE INHALTE darin GELÖSCHT!");
+                    p.sendMessage(ChatColor.RED + "Er wird dir anschließend im versteckten Modus gutgeschrieben.");
+
+                    TextComponent confirmButton = new TextComponent("[Ja, ich bestätige]");
+                    confirmButton.setColor(ChatColor.RED);
+                    confirmButton.setBold(true);
+                    confirmButton.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/bp confirmrecover"));
+                    confirmButton.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder("Klicke hier, um den Inhalt zu löschen & Rucksack zu recovern").create()));
+
+                    p.spigot().sendMessage(confirmButton);
+                    p.sendMessage(ChatColor.RED + "========================================");
+                    return true;
+                }
+
+                // Upgrade 2: Unverlierbar (Keine Löschung nötig)
                 recoverCooldowns.put(p.getUniqueId(), now);
 
                 clearDroppedBackpackItems(p.getUniqueId());
                 destroyPlacedBackpackBlocks(p.getUniqueId());
                 removeAllBackpackItems(p);
 
-                if (p.getInventory().firstEmpty() == -1) {
-                    dataConfig.set("hidden." + p.getUniqueId(), true);
-                    saveDataConfig();
-                    p.sendMessage(ChatColor.YELLOW + "Inventar voll! Das Backpack wurde wiederhergestellt und versteckt.");
-                    return true;
-                }
-
-                dataConfig.set("hidden." + p.getUniqueId(), false);
+                dataConfig.set("hidden." + p.getUniqueId(), true);
                 saveDataConfig();
 
-                p.getInventory().addItem(createBackpackItem(p.getUniqueId()));
-                p.sendMessage(ChatColor.GREEN + "Dein Rucksack wurde erfolgreich wiederhergestellt!");
+                p.sendMessage(ChatColor.GREEN + "Dein Rucksack wurde im versteckten Zustand wiederhergestellt! Nutze /bp show.");
                 p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
                 return true;
             }
+
+            p.sendMessage(ChatColor.RED + "Benutzung: /bp <menu|show|hide|recover>");
+            return true;
         }
 
         if (cmd.equals("bpadmin")) {
@@ -586,9 +566,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = event.getEntity();
         int upgradeLevel = getUpgradeLevel(p.getUniqueId());
 
-        // UPGRADE 2: Unverlierbar
         if (upgradeLevel >= 2) {
-            // Aus Drops entfernen
             event.getDrops().removeIf(this::isBackpackItem);
             dataConfig.set("hidden." + p.getUniqueId(), true);
             saveDataConfig();
@@ -596,14 +574,12 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             return;
         }
 
-        // STANDARD / UPGRADE 1: Droppen & Versterben
         boolean hadBackpack = hasBackpackInInventory(p) || dataConfig.getBoolean("hidden." + p.getUniqueId(), false);
 
         if (hadBackpack) {
             dataConfig.set("hidden." + p.getUniqueId(), false);
             setLostOnDeath(p.getUniqueId(), true);
 
-            // Falls versteckt, als Drop erzeugen
             if (!hasBackpackInInventory(p)) {
                 event.getDrops().add(createBackpackItem(p.getUniqueId()));
             }
@@ -641,7 +617,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             if (owner != null) {
                 UUID ownerUuid = UUID.fromString(owner);
                 if (getUpgradeLevel(ownerUuid) >= 1) {
-                    // UPGRADE 1: Schützt vor Lava, Feuer, Explosionen
                     event.setCancelled(true);
                 }
             }
@@ -656,7 +631,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             if (owner != null) {
                 UUID ownerUuid = UUID.fromString(owner);
                 if (getUpgradeLevel(ownerUuid) >= 1) {
-                    // UPGRADE 1: Verhindert Despawning
                     event.setCancelled(true);
                 }
             }
@@ -668,7 +642,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
-        // Shop GUI Handler
         if (event.getView().getTitle().equals(SHOP_TITLE)) {
             event.setCancelled(true);
             int slot = event.getRawSlot();
@@ -677,7 +650,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             int cost1 = getConfig().getInt("upgrade1_cost_diamonds", 128);
             int cost2 = getConfig().getInt("upgrade2_cost_diamonds", 256);
 
-            if (slot == 11) { // Upgrade 1
+            if (slot == 11) {
                 if (level >= 1) {
                     p.sendMessage(ChatColor.GREEN + "Du hast Upgrade 1 bereits freigeschaltet!");
                     return;
@@ -690,7 +663,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 } else {
                     p.sendMessage(ChatColor.RED + "Du benötigst " + cost1 + " Diamanten in deinem Inventar!");
                 }
-            } else if (slot == 15) { // Upgrade 2
+            } else if (slot == 15) {
                 if (level < 1) {
                     p.sendMessage(ChatColor.RED + "Du musst zuerst Upgrade 1 freischalten!");
                     return;
@@ -911,12 +884,13 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> list = new ArrayList<>();
-        if (command.getName().equalsIgnoreCase("bpitem") && args.length == 1) {
-            list.add("show");
-            list.add("hide");
-            list.add("recover");
-        } else if (command.getName().equalsIgnoreCase("backpack") && args.length == 1) {
-            list.add("menu");
+        if (command.getName().equalsIgnoreCase("backpack") || command.getName().equalsIgnoreCase("bp")) {
+            if (args.length == 1) {
+                list.add("menu");
+                list.add("show");
+                list.add("hide");
+                list.add("recover");
+            }
         } else if (command.getName().equalsIgnoreCase("bpadmin") && args.length == 1) {
             list.add("setcooldown");
             list.add("setupgrade1cost");
