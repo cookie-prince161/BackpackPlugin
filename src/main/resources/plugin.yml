@@ -1,18 +1,14 @@
 name: BackpackPlugin
-version: 1.1.0
+version: 1.1.1
 main: com.elias.backpack.BackpackPlugin
 api-version: '1.21'
 description: Fortgeschrittenes Backpack-Plugin mit Upgrades, Death-Handling & Admin-Einstellungen.
 
 commands:
   backpack:
-    description: Öffnet das Backpack-Menü oder das Upgrade-GUI.
+    description: Öffnet das Backpack-Menü, Upgrade-GUI oder verwalte das Backpack-Item.
     aliases: [bp]
-    usage: /backpack [menu]
-    permission: backpack.use
-  bpitem:
-    description: Zeigt, versteckt oder stellt das Backpack wieder her.
-    usage: /bpitem <show|hide|recover|confirmrecover>
+    usage: /backpack <menu|show|hide|recover|confirmrecover>
     permission: backpack.use
   bpadmin:
     description: Verwalte Cooldowns und Upgrade-Kosten.
