@@ -1,20 +1,26 @@
 name: BackpackPlugin
-version: 1.0.1
+version: 1.1.0
 main: com.elias.backpack.BackpackPlugin
 api-version: '1.21'
-description: Einzigartiges Backpack-System mit Quick-Access-Item, Block-Placement & Protection.
+description: Fortgeschrittenes Backpack-Plugin mit Upgrades, Death-Handling & Admin-Einstellungen.
 
 commands:
   backpack:
-    description: Öffnet das Backpack-Menü.
+    description: Öffnet das Backpack-Menü oder das Upgrade-GUI.
     aliases: [bp]
-    usage: /backpack
+    usage: /backpack [menu]
     permission: backpack.use
   bpitem:
-    description: Zeigt oder versteckt das Backpack Quick-Access Item.
-    usage: /bpitem <show|hide|recover>
+    description: Zeigt, versteckt oder stellt das Backpack wieder her.
+    usage: /bpitem <show|hide|recover|confirmrecover>
     permission: backpack.use
+  bpadmin:
+    description: Verwalte Cooldowns und Upgrade-Kosten.
+    usage: /bpadmin <setcooldown|setupgrade1cost|setupgrade2cost> <wert>
+    permission: backpack.admin
 
 permissions:
   backpack.use:
     default: true
+  backpack.admin:
+    default: op
