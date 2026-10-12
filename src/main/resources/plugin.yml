@@ -1,14 +1,23 @@
 name: BackpackPlugin
-version: 1.1.1
+version: 1.2.0
 main: com.elias.backpack.BackpackPlugin
 api-version: '1.21'
-description: Fortgeschrittenes Backpack-Plugin mit Upgrades, Death-Handling & Admin-Einstellungen.
+description: Fortgeschrittenes Backpack-Plugin mit Upgrades, Death-Handling & Admin-Einsichten.
 
 commands:
   backpack:
-    description: Öffnet das Backpack-Menü, Upgrade-GUI oder verwalte das Backpack-Item.
-    aliases: [bp]
-    usage: /backpack <menu|show|hide|recover|confirmrecover>
+    description: Öffnet das Backpack-Menü, den eigenen Rucksack oder den eines anderen Spielers.
+    aliases: [bp, bpsee]
+    usage: /backpack [menu|show|hide|recover|spieler]
+    permission: backpack.use
+  invsee:
+    description: Öffnet das Inventar eines Online- oder Offline-Spielers.
+    usage: /invsee <spieler>
+    permission: backpack.admin
+  enderchest:
+    description: Öffnet die Enderchest eines Online- oder Offline-Spielers.
+    aliases: [ec]
+    usage: /enderchest [spieler]
     permission: backpack.use
   bpadmin:
     description: Verwalte Cooldowns und Upgrade-Kosten.
