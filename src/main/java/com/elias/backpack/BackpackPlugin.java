@@ -107,7 +107,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             getCommand("bpadmin").setTabCompleter(this);
         }
 
-        getLogger().info("BackpackPlugin v1.2.2 erfolgreich aktiviert!");
+        getLogger().info("BackpackPlugin v1.2.3 erfolgreich aktiviert!");
     }
 
     @Override
@@ -203,7 +203,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         meta.setDisplayName(ChatColor.GOLD + "Rucksack" + subTitle);
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "Linksklick im Inv: " + ChatColor.YELLOW + "Item bewegen");
-        lore.add(ChatColor.GRAY + "Rechtsklick / Q im Inv: " + ChatColor.YELLOW + "Rucksack öffnen");
+        lore.add(ChatColor.GRAY + "Rechtsklick / Q im Inv: " + ChatColor.YELLOW + "Rucksack öffnen / Schließen");
         lore.add(ChatColor.GRAY + "Shift + Rechtsklick: " + ChatColor.YELLOW + "Als Kiste platzieren");
         lore.add(ChatColor.GRAY + "Linksklick auf Kiste: " + ChatColor.YELLOW + "Sofort abbauen");
         meta.setLore(lore);
@@ -301,9 +301,15 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         Inventory inv = getBackpackInventory(ownerUuid);
         inv.clear();
         saveBackpack(ownerUuid, inv);
+
+        Player owner = Bukkit.getPlayer(ownerUuid);
+        if (owner != null && owner.isOnline()) {
+            owner.sendMessage(ChatColor.RED + "Dein Rucksack wurde zerstört! Da du kein Upgrade 1 hast, wurden alle Inhalte darin GELÖSCHT.");
+            owner.playSound(owner.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+        }
     }
 
-    // ===== CUSTOM INVSEE GUI (DOPPELKISTE MIT LIVE SYNCHRONISATION) =====
+    // ===== CUSTOM INVSEE GUI (DOPPELKISTE) =====
 
     public Inventory createCustomInvseeGUI(Player target) {
         Inventory gui = Bukkit.createInventory(null, 54, ADMIN_INV_PREFIX + target.getName());
@@ -335,16 +341,14 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         gui.setItem(39, armor[0] != null ? armor[0].clone() : null); // Schuhe
 
         ItemStack offhand = target.getInventory().getItemInOffHand();
-        gui.setItem(44, (offhand != null && offhand.getType() != Material.AIR) ? offhand.clone() : null); // Offhand
+        gui.setItem(44, (offhand != null && offhand.getType() != Material.AIR) ? offhand.clone() : null);
     }
 
     private void syncInvseeToPlayer(Inventory gui, Player target) {
-        // Sync Slots 0 bis 35 (Haupt-Inv + Hotbar)
         for (int i = 0; i < 36; i++) {
             target.getInventory().setItem(i, gui.getItem(i));
         }
 
-        // Sync Rüstung
         ItemStack[] armor = new ItemStack[4];
         armor[3] = gui.getItem(36); // Helm
         armor[2] = gui.getItem(37); // Chestplate
@@ -352,12 +356,29 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         armor[0] = gui.getItem(39); // Schuhe
         target.getInventory().setArmorContents(armor);
 
-        // Sync Offhand
         target.getInventory().setItemInOffHand(gui.getItem(44));
         target.updateInventory();
     }
 
-    // ===== SHOP GUI MIT TOGGLE =====
+    private boolean isValidArmorForSlot(int slot, ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) return true;
+        String type = item.getType().name();
+
+        switch (slot) {
+            case 36: // Helm
+                return type.endsWith("_HELMET") || type.endsWith("_HEAD") || type.endsWith("_SKULL") || type.equals("TURTLE_HELMET");
+            case 37: // Brustplatte
+                return type.endsWith("_CHESTPLATE") || type.equals("ELYTRA");
+            case 38: // Hose
+                return type.endsWith("_LEGGINGS");
+            case 39: // Schuhe
+                return type.endsWith("_BOOTS");
+            default:
+                return true;
+        }
+    }
+
+    // ===== SHOP GUI =====
 
     public void openShopGUI(Player p) {
         Inventory shop = Bukkit.createInventory(null, 27, SHOP_TITLE);
@@ -579,7 +600,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             }
 
             if (action.equals("recover")) {
-                // WARNUNG NUR WENN DAS ITEM AM TODESORT LIEGT
                 if (isLostOnDeath(p.getUniqueId())) {
                     pendingConfirmations.add(p.getUniqueId());
 
@@ -599,7 +619,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                     return true;
                 }
 
-                // Normaler Recover (z. B. verbrannt ohne Upgrade 1)
                 long cooldownSec = getConfig().getLong("recover_cooldown_seconds", 300);
                 long lastUsed = recoverCooldowns.getOrDefault(p.getUniqueId(), 0L);
                 long now = System.currentTimeMillis();
@@ -624,7 +643,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
                 return true;
             }
 
-            // ADMIN: Rucksack eines anderen Spielers ansehen
             if (p.hasPermission("backpack.admin")) {
                 OfflinePlayer target = Bukkit.getOfflinePlayer(args[0]);
                 if (target.hasPlayedBefore() || target.isOnline()) {
@@ -639,7 +657,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             return true;
         }
 
-        // ADMIN COMMAND: /invsee <spieler>
         if (cmd.equals("invsee")) {
             if (!p.hasPermission("backpack.admin")) {
                 p.sendMessage(ChatColor.RED + "Keine Rechte.");
@@ -660,7 +677,6 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             return true;
         }
 
-        // COMMAND: /enderchest [spieler]
         if (cmd.equals("enderchest") || cmd.equals("ec")) {
             if (args.length == 0) {
                 p.openInventory(p.getEnderChest());
@@ -732,10 +748,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             if (owner != null) {
                 UUID ownerUuid = UUID.fromString(owner);
                 if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
-                    // UPGRADE 1 AKTIV: Verhindert Verbrennen in Lava/Feuer
                     event.setCancelled(true);
                 } else {
-                    // KEIN UPGRADE 1: Item wird verbrannt -> Inhalt aus der Datei löschen!
                     clearBackpackContents(ownerUuid);
                 }
             }
@@ -750,10 +764,8 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             if (owner != null) {
                 UUID ownerUuid = UUID.fromString(owner);
                 if (getEffectiveUpgradeLevel(ownerUuid) >= 1) {
-                    // UPGRADE 1 AKTIV: Verhindert Despawn
                     event.setCancelled(true);
                 } else {
-                    // KEIN UPGRADE 1: Despawnt -> Inhalt löschen!
                     clearBackpackContents(ownerUuid);
                 }
             }
@@ -810,20 +822,30 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
         if (!(event.getWhoClicked() instanceof Player)) return;
         Player p = (Player) event.getWhoClicked();
 
-        // LIVE SYNCHRONISIERUNG FÜR /INVSEE
+        // 1. RÜSTUNGSSLOT-PRÜFUNG IM CUSTOM INVSEE
         if (event.getView().getTitle().startsWith(ADMIN_INV_PREFIX)) {
             int slot = event.getRawSlot();
-            // Verhindert Klicks auf schwarze Glass Panes
+
+            // Blockiert Klicks auf Glas-Panes
             if (slot >= 36 && slot < 54 && slot != 44 && slot > 39) {
                 event.setCancelled(true);
                 return;
+            }
+
+            // Prüfe Rüstungsslots 36-39
+            if (slot >= 36 && slot <= 39) {
+                ItemStack cursor = event.getCursor();
+                if (!isValidArmorForSlot(slot, cursor)) {
+                    event.setCancelled(true);
+                    p.sendMessage(ChatColor.RED + "Dieser Gegenstand passt nicht in diesen Rüstungsslot!");
+                    return;
+                }
             }
 
             String targetName = event.getView().getTitle().replace(ADMIN_INV_PREFIX, "");
             Player target = Bukkit.getPlayer(targetName);
 
             if (target != null) {
-                // Synchronisiere einen Tick später direkt mit dem Inventar des Ziel-Spielers
                 Bukkit.getScheduler().runTask(this, () -> {
                     syncInvseeToPlayer(event.getInventory(), target);
                 });
@@ -831,7 +853,7 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
             return;
         }
 
-        // SHOP GUI HANDLER
+        // 2. SHOP GUI HANDLER
         if (event.getView().getTitle().equals(SHOP_TITLE)) {
             event.setCancelled(true);
             int slot = event.getRawSlot();
@@ -909,6 +931,13 @@ public class BackpackPlugin extends JavaPlugin implements Listener, CommandExecu
 
             if (click == ClickType.RIGHT || click == ClickType.DROP || click == ClickType.CONTROL_DROP) {
                 event.setCancelled(true);
+
+                // TOGGLE-LOGIK: Wenn Backpack-GUI bereits offen ist -> Schließen
+                if (event.getView().getTitle().equals(GUI_TITLE)) {
+                    p.closeInventory();
+                    p.playSound(p.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 0.8f, 0.8f);
+                    return;
+                }
 
                 if (isLostOnDeath(p.getUniqueId())) {
                     p.sendMessage(ChatColor.RED + "Dein Rucksack ist gesperrt!");
